@@ -1,7 +1,7 @@
 # ClipStack
 
 Clipboard history you can browse, search, and paste from — including **several
-clips at once**.
+clips at once**. Text, images, videos and files.
 
 Everything you copy is recorded in the background. When you need something back,
 open the picker, tick as many clips as you want, and either merge them into one
@@ -10,7 +10,7 @@ paste or queue them to paste one after another.
 Runs on **macOS**, **Windows**, and **iPhone / iPad** (through the Shortcuts app).
 
 <p align="center">
-  <img src="demo/demo.svg" alt="Terminal demo: five copies are recorded, three are merged into one paste, then queued and pasted one by one" width="668">
+  <img src="demo/demo.svg" alt="Terminal demo: copies are recorded, three are merged into one paste, then queued and pasted one by one; a screenshot and a video file are recorded and the image is pasted back as an image" width="668">
 </p>
 
 <p align="center">
@@ -124,6 +124,53 @@ keys; the ones you leave out keep their defaults:
 built-in list of password managers, so keep those in it. Restart the recorder
 afterwards: `launchctl kickstart -k gui/$UID/com.clipstack.watcher`.
 
+The image and video settings are covered in the next section.
+
+### Images, videos and files
+
+Everything comes back the way it was copied:
+
+| You copy… | ClipStack keeps | Pasting it back gives |
+|---|---|---|
+| a screenshot, or *Copy Image* in a browser or Preview | the image, once, in `media/` | the image (plus TIFF for older apps) |
+| video data (QuickTime *Copy*, for instance) | the video, once, in `media/` | the video, and a file apps can attach |
+| files in Finder — videos, photos, anything | only their paths | the files themselves |
+
+In listings they show up as `🖼 Image 1440×900`, `🎬 Video 12.4 MB`,
+`🎬 holiday.mov` or `🗂 3 files: …`, and `search image` finds them.
+
+Merging a mix pastes it the way the destination can take it:
+- **Only text:** one piece of text.
+- **Only files:** all the files at once.
+- **Anything with an image or video:** a rich document with the pictures
+  inline, plus the text on its own for plain fields.
+
+Queueing pastes each clip whole, so an image, then a caption, then a link
+works fine.
+
+It is built to stay out of the way:
+- **Files cost nothing.** A 4 GB video copied in Finder is stored as one line of text.
+- **Images are stored as copied.** PNG, JPEG, HEIC and GIF are never re-encoded;
+  only TIFF, which is uncompressed, is converted to PNG. Each file is named by a
+  hash of its content, so the same image is stored once however often you copy it.
+- **Nothing slows your copying.** Hashing, converting and saving happen on a
+  low-priority background queue. The recorder keeps polling meanwhile, so quick
+  copies made while a big image is saved are all caught, in order (`tests/test-macos.sh`
+  checks this with a 45 MB image).
+- **Size is read from the image header,** so listing never decodes a picture.
+- **Pasting back is tagged**, so the recorder doesn't read and hash the same
+  image again when ClipStack itself pastes it.
+- **Disk use is capped.** Images and videos over `maxMediaMB` (default 100) are
+  skipped. Once they add up to `mediaBudgetMB` (default 1024), the oldest go
+  first, and their files are deleted along with them.
+
+```json
+{ "recordMedia": true, "maxMediaMB": 100, "mediaBudgetMB": 1024 }
+```
+
+Set `recordMedia` to `false` to keep text and files only. `clipstack status`
+shows how much space images and videos use.
+
 ### Managing the recorder
 
 ```sh
@@ -139,7 +186,8 @@ tail -f ~/Library/Logs/clipstack.log                # logs
 
 Five shortcuts, nothing else to install. iOS lets nothing watch the clipboard in
 the background, so **saving a clip is one tap** here instead of automatic.
-Picking, merging and queueing work as they do on the Mac.
+Picking, merging and queueing work as they do on the Mac, for text, images and
+videos alike.
 
 ### Install
 
@@ -150,11 +198,11 @@ devices.
 
 | Shortcut | Does |
 |---|---|
-| `ClipStack iOS - Save` | Adds what's on the clipboard to history, or text you share to it from the share sheet |
-| `ClipStack iOS - Paste Multiple` | Tick several clips; they are merged onto the clipboard, one per line |
+| `ClipStack iOS - Save` | Adds what's on the clipboard to history (text, an image or a video), or whatever you share to it from the share sheet |
+| `ClipStack iOS - Paste Multiple` | Tick several clips; text is merged onto the clipboard, one per line. With images or videos among them, each goes on as its own item |
 | `ClipStack iOS - Queue Multiple` | Tick several; the first goes on the clipboard, the rest wait |
 | `ClipStack iOS - Paste Next` | Loads the next queued clip |
-| `ClipStack iOS - Clear` | Empties history and the queue (asks first) |
+| `ClipStack iOS - Clear` | Empties history and the queue and deletes saved images and videos (asks first) |
 
 Picked clips are pasted top to bottom, in the order the list shows them (newest
 first).
@@ -164,7 +212,8 @@ first).
 - **Back Tap** (iPhone): Settings › Accessibility › Touch › Back Tap › Double
   Tap › `ClipStack iOS - Save`. Copy something, tap the back of the phone twice.
 - **Action Button** (iPhone 15 Pro and later): Settings › Action Button › Shortcut.
-- **Share sheet**: select text anywhere, tap Share › `ClipStack iOS - Save`.
+- **Share sheet**: select text, or a photo or video in Photos, tap Share ›
+  `ClipStack iOS - Save`.
 - **Control Center** or a **Home Screen widget**: add Save, Paste Multiple and
   Paste Next for quick access, which is handy on iPad.
 
@@ -173,7 +222,7 @@ first).
 Each shortcut asks once before it reads the clipboard, saves a file or shows a
 notification. Choose **Always Allow** so it stops asking. If iOS keeps asking
 before *pasting*, set Settings › Apps › Shortcuts › Paste from Other Apps to
-**Allow**.
+**Allow**. Clear also asks you to confirm deleting the `media` folder each time.
 
 ### Where it keeps things
 
@@ -181,6 +230,12 @@ before *pasting*, set Settings › Apps › Shortcuts › Paste from Other Apps 
 when iCloud Drive is off), in `history.txt` and `queue.txt`. The newest 200
 clips are kept. With iCloud Drive on, these files sync like any other iCloud
 Drive file.
+
+Images and videos are saved as they are, once each, in `ClipStack/media`, named
+by a hash of their content. History lists them as, for example,
+`🖼 Image 1.2 MB — 3f9a1c2b0d4e.png`, and pasting gives back the picture or the
+video itself. They stay until you run Clear. Save records a video the size it
+is, so saving long videos fills space quickly.
 
 Password managers' "don't record this" markers aren't visible to Shortcuts, so
 just don't run Save on a password.
@@ -231,18 +286,28 @@ tray icon's right-click menu.
 Windows already has `Win+V`. ClipStack sits alongside it and adds search,
 unlimited history, and the merge/queue modes.
 
+**Images and files.** Copied images are kept as PNG in `media\`, once each, and
+paste back as images (transparency included). Files copied in Explorer, videos
+among them, are kept by reference and paste back as the files. Merging text with
+images gives HTML with the pictures inline (Word, Outlook, Gmail), plus the text
+on its own. Encoding and saving images happens on a background thread, so the
+picker and tray never wait on it. Images over 100 MB are skipped, and once they
+total 1 GB the oldest go first.
+
 ---
 
 ## Where your data lives
 
 | | |
 |---|---|
-| macOS | `~/Library/Application Support/ClipStack/` |
-| Windows | `%LOCALAPPDATA%\ClipStack\` |
-| iPhone / iPad | `Shortcuts/ClipStack/` in iCloud Drive or On My iPhone |
+| macOS | `~/Library/Application Support/ClipStack/` (images and videos in `media/`) |
+| Windows | `%LOCALAPPDATA%\ClipStack\` (images in `media\`) |
+| iPhone / iPad | `Shortcuts/ClipStack/` in iCloud Drive or On My iPhone (images and videos in `media/`) |
 
-On macOS and Windows: local plain files, nothing synced anywhere. Last 500
-clips; pinned clips are never evicted.
+On macOS and Windows: local files, nothing synced anywhere. Last 500 clips;
+pinned clips are never evicted. Files copied in Finder or Explorer are kept as
+paths, not copies. If you move or delete the original, pasting that clip can't
+bring it back.
 
 **Passwords are skipped.** Both versions honour the standard "don't record this"
 clipboard markers that password managers set (`org.nspasteboard.ConcealedType`

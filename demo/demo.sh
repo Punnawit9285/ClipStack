@@ -60,6 +60,10 @@ run() {
 # Shows what is on the (demo) clipboard right now.
 clipboard() {
     local text; text="$(osascript -l JavaScript "$ROOT/tests/pasteboard.js" "$CLIPSTACK_PASTEBOARD" get)"
+    if [ -z "$text" ] && osascript -l JavaScript "$ROOT/tests/pasteboard.js" "$CLIPSTACK_PASTEBOARD" types | grep -q public.png; then
+        osascript -l JavaScript "$ROOT/tests/pasteboard.js" "$CLIPSTACK_PASTEBOARD" save public.png "$SANDBOX/pasted.png" >/dev/null
+        text="🖼 the image itself: $(sips -g pixelWidth -g pixelHeight "$SANDBOX/pasted.png" | awk '/pixel/ {print $2}' | paste -sd× -) PNG"
+    fi
     record clip "$text"
     printf '%s┌ clipboard%s\n' "$CYAN" "$RESET"
     while IFS= read -r line; do printf '%s│%s %s\n' "$CYAN" "$RESET" "$line"; done <<< "$text"
@@ -76,6 +80,38 @@ copy() {
     record copy "$shown"
     printf '  %s⌘C%s  %s\n' "$YELLOW" "$RESET" "$shown"; pause 0.5
 }
+
+# Another app copies an image (a screenshot, say).
+copy_image() {
+    osascript -l JavaScript "$ROOT/tests/pasteboard.js" "$CLIPSTACK_PASTEBOARD" data "public.png=$1" >/dev/null
+    for _ in $(seq 50); do clipstack list -n 1 --sep | grep -q "Image" && break; sleep 0.1; done
+    record copy "$2"
+    printf '  %s⌘C%s  %s\n' "$YELLOW" "$RESET" "$2"; pause 0.5
+}
+
+# Finder copies a file.
+copy_file() {
+    osascript -l JavaScript "$ROOT/tests/pasteboard.js" "$CLIPSTACK_PASTEBOARD" file "$1" >/dev/null
+    for _ in $(seq 50); do [ "$(clipstack list -n 1 --sep)" == "$1" ] && break; sleep 0.1; done
+    record copy "$2"
+    printf '  %s⌘C%s  %s\n' "$YELLOW" "$RESET" "$2"; pause 0.5
+}
+
+# A screenshot-like picture and a stand-in video file for the image part.
+python3 - "$SANDBOX/screenshot.png" <<'PY'
+import struct, sys, zlib
+w, h = 1280, 800
+rows = []
+for y in range(h):
+    row = bytearray([0])
+    for x in range(w):
+        row += bytes((30 + x * 90 // w, 60 + y * 120 // h, 140 + (x + y) * 60 // (w + h)))
+    rows.append(bytes(row))
+chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                       + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
+PY
+mkdir -p "$SANDBOX/Movies" && head -c 2000000 /dev/zero > "$SANDBOX/Movies/holiday.mov"
 
 # --- the tour --------------------------------------------------------------------
 
@@ -111,6 +147,13 @@ clipboard
 note "Password managers mark secrets as concealed; those are never recorded."
 copy "hunter2" "org.nspasteboard.ConcealedType"
 run clipstack search hunter2 --pretty
+
+note "Images and videos too: pasted back as themselves, not as text."
+copy_image "$SANDBOX/screenshot.png" "a screenshot"
+copy_file "$SANDBOX/Movies/holiday.mov" "holiday.mov, in Finder"
+run clipstack list --pretty -n 3
+run clipstack copy 1
+clipboard
 
 note "clipstack pick does all of this from a dialog — tick as many as you like."
 

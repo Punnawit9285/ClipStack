@@ -141,6 +141,38 @@
  },
  {
   "kind": "note",
+  "text": "Images and videos too: pasted back as themselves, not as text."
+ },
+ {
+  "kind": "copy",
+  "text": "a screenshot"
+ },
+ {
+  "kind": "copy",
+  "text": "holiday.mov, in Finder"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack list --pretty -n 3"
+ },
+ {
+  "kind": "out",
+  "text": "  0  🎬 holiday.mov — Code\n  1  🖼 Image 1280×800 — Code\n  2  Invoice #1042 — Acme Ltd, due 30 Sep — Code"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack copy 1"
+ },
+ {
+  "kind": "out",
+  "text": "copied #1"
+ },
+ {
+  "kind": "clip",
+  "text": "🖼 the image itself: 1280×800 PNG"
+ },
+ {
+  "kind": "note",
   "text": "clipstack pick does all of this from a dialog — tick as many as you like."
  }
 ]

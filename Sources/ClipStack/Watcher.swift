@@ -1,13 +1,21 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
-/// Polls the pasteboard's change counter and records new text clips.
-/// Reading `changeCount` is cheap, so the real pasteboard contents are only
-/// touched when something actually changed.
+/// Polls the pasteboard's change counter and records new clips: text, files,
+/// images and videos. Reading `changeCount` is cheap, so the real pasteboard
+/// contents are only touched when something actually changed.
 final class Watcher {
     private let store: Store
     private let config: Config
     private var lastChangeCount: Int
+    /// A change whose contents weren't readable yet, and how often we've looked.
+    private var pendingCount = -1
+    private var attempts = 0
+
+    /// Every write to history happens here, in copy order. Hashing, converting
+    /// and saving a big image or video therefore never holds up the next poll.
+    private let work = DispatchQueue(label: "clipstack.record", qos: .utility)
 
     /// Markers that well-behaved apps (password managers, clipboard tools)
     /// set to say "do not record this".
@@ -19,6 +27,11 @@ final class Watcher {
         "com.agilebits.onepassword",
     ]
 
+    /// Set on anything ClipStack itself puts back on the pasteboard, holding the
+    /// clip's key. Seeing it, the watcher just moves that clip to the top instead
+    /// of reading, hashing and storing the same image or video again.
+    static let restoredType = NSPasteboard.PasteboardType("com.clipstack.restored")
+
     init(store: Store, config: Config) {
         self.store = store
         self.config = config
@@ -29,8 +42,9 @@ final class Watcher {
         // Captured strongly on purpose: `run()` never returns, so the watcher
         // must outlive this scope for the timer to keep firing.
         let timer = Timer(timeInterval: config.pollSeconds, repeats: true) { _ in
-            self.tick()
+            autoreleasepool { self.tick() }
         }
+        timer.tolerance = config.pollSeconds / 4   // lets macOS coalesce wake-ups
         RunLoop.main.add(timer, forMode: .common)
         FileHandle.standardError.write("clipstack: watching pasteboard (every \(config.pollSeconds)s)\n".data(using: .utf8)!)
         RunLoop.main.run()
@@ -41,25 +55,79 @@ final class Watcher {
         let pb = pasteboard
         let count = pb.changeCount
         guard count != lastChangeCount else { return }
-        lastChangeCount = count
+        if count != pendingCount { pendingCount = count; attempts = 0 }
 
-        guard let types = pb.types else { return }
-        if types.contains(where: { Watcher.privateTypes.contains($0.rawValue) }) { return }
+        // An app that copies something large may still be writing it. If so,
+        // look again next tick rather than losing the copy (for a few seconds).
+        attempts += 1
+        if consume(pb) || attempts >= 10 { lastChangeCount = count }
+    }
+
+    /// Records whatever is on the pasteboard. Returns false only when it
+    /// isn't readable yet; skipping something on purpose counts as done.
+    private func consume(_ pb: NSPasteboard) -> Bool {
+        guard let types = pb.types, !types.isEmpty else { return false }
+        if types.contains(where: { Watcher.privateTypes.contains($0.rawValue) }) { return true }
 
         let front = NSWorkspace.shared.frontmostApplication
-        if let bundleID = front?.bundleIdentifier, config.ignoredBundleIDs.contains(bundleID) { return }
+        if let bundleID = front?.bundleIdentifier, config.ignoredBundleIDs.contains(bundleID) { return true }
+        let app = front?.localizedName
+        let store = self.store
 
-        // File copies arrive as URLs; record their paths so they are still greppable.
+        if let key = pb.string(forType: Watcher.restoredType) {
+            work.async { store.promote(key: key) }
+            return true
+        }
+
+        // Files (from Finder, say) are kept by reference: nothing is copied, so
+        // a multi-gigabyte video costs no more than a line of text.
         if types.contains(.fileURL),
            let urls = pb.readObjects(forClasses: [NSURL.self],
                                      options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
-            let paths = urls.map(\.path).joined(separator: "\n")
-            store.add(text: paths, app: front?.localizedName)
-            return
+            let paths = urls.map(\.path)
+            work.async { store.add(files: paths, app: app) }
+            return true
         }
 
-        guard let text = pb.string(forType: .string) else { return }
-        store.add(text: text, app: front?.localizedName)
+        let text = pb.string(forType: .string)
+        let mediaType = config.recordMedia ? Watcher.bestMediaType(in: types) : nil
+
+        // Text wins, except when it is just the address of a copied image (as
+        // browsers add) — then the image is what was meant.
+        if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           mediaType == nil || !Watcher.isJustAnAddress(text) {
+            work.async { store.add(text: text, app: app) }
+            return true
+        }
+
+        guard let mediaType else { return true }
+        guard let data = pb.data(forType: mediaType) else { return false }
+        let type = UTType(mediaType.rawValue) ?? .data
+        let maxBytes = config.maxMediaMB * 1_048_576
+        work.async {
+            autoreleasepool {
+                guard let media = MediaStore.save(data, type: type, maxBytes: maxBytes) else { return }
+                store.add(media: media, text: text ?? "", app: app)
+            }
+        }
+        return true
+    }
+
+    /// The most useful image or video representation on offer: video over
+    /// image, and compact formats over TIFF.
+    static func bestMediaType(in types: [NSPasteboard.PasteboardType]) -> NSPasteboard.PasteboardType? {
+        let known = types.compactMap { t in UTType(t.rawValue).map { (t, $0) } }
+        if let video = known.first(where: { $0.1.conforms(to: .movie) }) { return video.0 }
+        for preferred in [UTType.png, .jpeg, .heic, .gif, .webP, .tiff] {
+            if let hit = known.first(where: { $0.1 == preferred }) { return hit.0 }
+        }
+        return known.first(where: { $0.1.conforms(to: .image) })?.0
+    }
+
+    static func isJustAnAddress(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.contains(where: \.isWhitespace), let url = URL(string: t), let scheme = url.scheme else { return false }
+        return ["http", "https", "file", "data"].contains(scheme.lowercased())
     }
 }

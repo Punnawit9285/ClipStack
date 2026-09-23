@@ -44,14 +44,24 @@ enum Picker {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reply.isEmpty else { return [] }
 
-        return reply.components(separatedBy: QUEUE_SENTINEL).compactMap { label in
-            guard let dot = label.range(of: ". ") else { return nil }
-            return Int(label[label.startIndex..<dot.lowerBound])
-        }
+        return reply.components(separatedBy: QUEUE_SENTINEL).compactMap(index(in:))
     }
 
     /// Numbered single-line labels, so the chosen entries can be mapped back.
-    static func labels(for clips: [Clip]) -> [String] {
-        clips.enumerated().map { "\($0.offset). \($0.element.label(width: 90))" }
+    /// `numbers` defaults to 0, 1, 2…
+    static func labels(for clips: [Clip], numbers: [Int]? = nil) -> [String] {
+        clips.enumerated().map { "\(numbers?[$0.offset] ?? $0.offset). \($0.element.label(width: 90))" }
+    }
+
+    /// The number a label starts with.
+    static func index(in label: String) -> Int? {
+        guard let dot = label.range(of: ". ") else { return nil }
+        return Int(label[label.startIndex..<dot.lowerBound])
+    }
+
+    /// A label without its number.
+    static func body(of label: String) -> String {
+        guard let dot = label.range(of: ". ") else { return label }
+        return String(label[dot.upperBound...])
     }
 }

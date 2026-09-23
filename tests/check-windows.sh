@@ -32,6 +32,21 @@ if [ -n "$DOTNET" ]; then
     else
         echo "  FAIL  C# does not compile:"; echo "$out" | grep -E "error|warning" | sort -u; FAIL=1
     fi
-else echo "  skip  C# compile (no dotnet SDK)"; fi
+
+    # The history, image and queue logic, run for real (it needs no Windows APIs).
+    mkdir -p "$WORK/unit"
+    cp "$ROOT/tests/windows/StoreTests.csproj" "$ROOT/tests/windows/StoreTests.cs" "$WORK/unit/"
+    { printf 'using System;\nusing System.Collections.Generic;\nusing System.IO;\nusing System.Linq;\n'
+      printf 'using System.Security.Cryptography;\nusing System.Text;\nnamespace ClipStack {\n'
+      awk '/^public class Clip \{/{f=1} /^public static class Recorder/{f=0} f' "$WORK/ClipStack.cs" | grep -v '^///'
+      printf '}\n'; } > "$WORK/unit/Store.cs"
+    if out="$(DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET" run --project "$WORK/unit/StoreTests.csproj" 2>&1)"; then
+        echo "$out" | grep -E "^  (ok|FAIL)" | sed 's/^/  /'
+        echo "  ok    unit tests: $(echo "$out" | tail -1)"
+    else
+        echo "$out" | grep -E "FAIL|expected|got:|error" | sed 's/^/  /'
+        echo "  FAIL  unit tests: $(echo "$out" | tail -1)"; FAIL=1
+    fi
+else echo "  skip  C# compile and unit tests (no dotnet SDK)"; fi
 
 exit $FAIL

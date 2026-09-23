@@ -7,3 +7,4 @@
 macos/*.shortcut
 *.unsigned.shortcut
 __pycache__/
+.vscode/

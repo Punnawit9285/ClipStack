@@ -66,7 +66,34 @@ start_watcher() {
     sleep 0.4
 }
 stop_watcher() { kill "$WATCHER" 2>/dev/null; wait "$WATCHER" 2>/dev/null; WATCHER=""; }
-reset() { stop_watcher; rm -f "$CLIPSTACK_HOME"/*.json; }
+reset() { stop_watcher; rm -f "$CLIPSTACK_HOME"/*.json; rm -rf "$CLIPSTACK_HOME/media"; }
+# A field of the newest recorded clip, as JSON (e.g. newest_field media).
+newest_field() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["items"][0].get(sys.argv[2]), ensure_ascii=False))' "$CLIPSTACK_HOME/history.json" "$1" 2>/dev/null; }
+clip_count() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["items"]))' "$CLIPSTACK_HOME/history.json"; }
+media_files() { ls "$CLIPSTACK_HOME/media" 2>/dev/null | wc -l | tr -d ' '; }
+# Copy image/video data (TYPE=PATH …) and wait until the newest clip has media.
+copy_media() {
+    local before; before="$(newest_field media)"
+    pb data "$@" >/dev/null
+    for _ in $(seq 60); do
+        local now; now="$(newest_field media)"
+        [ "$now" != "null" ] && [ "$now" != "$before" ] && return 0
+        sleep 0.1
+    done
+    return 1
+}
+# make_png PATH W H SEED: random pixels, so it doesn't compress and sizes are predictable.
+make_png() {
+    python3 - "$@" <<'PY'
+import random, struct, sys, zlib
+path, w, h, seed = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+rnd = random.Random(seed)
+raw = b"".join(b"\x00" + rnd.randbytes(w * 3) for _ in range(h))
+chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                       + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+PY
+}
 
 # ---------------------------------------------------------------------------
 echo "==> Empty state"
@@ -203,6 +230,136 @@ cs queue 0 1 >/dev/null; cs clear 2>/dev/null
 eq    "clear also drops the queue"           "$(cs queue-status)" "no queue"
 
 # ---------------------------------------------------------------------------
+echo "==> Images, videos and files"
+FIX="$(mktemp -d -t clipstack-fixtures)"
+make_png "$FIX/red.png" 40 30 1
+make_png "$FIX/blue.png" 20 10 2
+make_png "$FIX/web.png" 16 16 3
+make_png "$FIX/sheet.png" 12 12 4
+sips -s format tiff "$FIX/blue.png" --out "$FIX/blue.tiff" >/dev/null
+head -c 300000 /dev/urandom > "$FIX/clip.mp4"
+mkdir -p "$FIX/files"; head -c 1000 /dev/urandom > "$FIX/files/holiday.mov"; cp "$FIX/red.png" "$FIX/files/photo.png"
+
+reset; echo '{"pollSeconds": 0.1}' > "$CLIPSTACK_HOME/config.json"; start_watcher
+check "a copied PNG is recorded"             copy_media "public.png=$FIX/red.png"
+check "…labelled with its size"              sh -c "'$BIN' list --pretty -n 1 | grep -q '🖼 Image 40×30'"
+RED="$CLIPSTACK_HOME/media/$(newest_field media | python3 -c 'import json,sys; print(json.load(sys.stdin)["file"])')"
+check "…stored byte for byte, not re-encoded" cmp -s "$RED" "$FIX/red.png"
+
+check "a TIFF-only image is recorded"        copy_media "public.tiff=$FIX/blue.tiff"
+eq    "…and stored as PNG, not bulky TIFF"   "$(newest_field media | python3 -c 'import json,sys; m=json.load(sys.stdin); print(m["type"], m["file"].rsplit(".",1)[1], m["width"], m["height"])')" "public.png png 20 10"
+
+copy_and_wait "some text" >/dev/null
+N="$(clip_count)"; F="$(media_files)"
+check "copying the same image again…"        copy_media "public.png=$FIX/red.png"
+eq    "…promotes it instead of duplicating"  "$(clip_count):$(media_files)" "$N:$F"
+
+check "an image with its web address (browser style)" copy_media "public.png=$FIX/web.png" --text "https://example.com/cat.png"
+eq    "…is kept as the image, with the address" "$(cs list -n 1)" '["🖼 Image 16×16 · https://example.com/cat.png"]'
+eq    "…which is its text"                   "$(newest_field text)" '"https://example.com/cat.png"'
+
+pb data "public.png=$FIX/sheet.png" --text "42" >/dev/null
+for _ in $(seq 30); do [ "$(newest)" == "42" ] && break; sleep 0.1; done
+eq    "text with a rendered picture (spreadsheet style) stays text" "$(newest_field media):$(newest)" "null:42"
+
+check "copied video data is recorded"        copy_media "public.mpeg-4=$FIX/clip.mp4"
+check "…labelled as a video"                 sh -c "'$BIN' list --pretty -n 1 | grep -q '🎬 Video 300 KB'"
+eq    "…and kept as .mp4"                    "$(newest_field media | python3 -c 'import json,sys; print(json.load(sys.stdin)["file"].rsplit(".",1)[1])')" "mp4"
+
+pb file "$FIX/files/holiday.mov" >/dev/null
+for _ in $(seq 30); do [ "$(newest)" == "$FIX/files/holiday.mov" ] && break; sleep 0.1; done
+check "a video file copied in Finder is recorded by reference" sh -c "'$BIN' list --pretty -n 1 | grep -q '🎬 holiday.mov'"
+pb file "$FIX/files/holiday.mov" "$FIX/files/photo.png" >/dev/null
+for _ in $(seq 30); do [ "$(newest_field files)" != "null" ] && [ "$(newest_field files | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" == "2" ] && break; sleep 0.1; done
+check "several files are one clip"           sh -c "'$BIN' list --pretty -n 1 | grep -q '🗂 2 files: holiday.mov, photo.png'"
+eq    "…and nothing was copied into ClipStack" "$(ls "$CLIPSTACK_HOME/media" | grep -c -E 'mov$')" "0"
+check "search finds images by 'image'"       sh -c "'$BIN' search image --pretty | grep -q '🖼 Image 40×30'"
+check "search finds files by name"           sh -c "'$BIN' search holiday --pretty | grep -q 'holiday.mov'"
+
+stop_watcher   # keep the numbers still while pasting back
+idx() { cs list --pretty | grep -F "$1" | head -1 | awk '{print $1}'; }
+
+cs copy "$(idx '🖼 Image 40×30')" 2>/dev/null
+check "copy puts the image back"             sh -c "osascript -l JavaScript '$ROOT/tests/pasteboard.js' '$CLIPSTACK_PASTEBOARD' types | grep -q 'public.png'"
+pb save public.png "$FIX/out.png" >/dev/null
+check "…exactly as it was copied"            cmp -s "$FIX/out.png" "$FIX/red.png"
+check "…with TIFF alongside for older apps"  sh -c "osascript -l JavaScript '$ROOT/tests/pasteboard.js' '$CLIPSTACK_PASTEBOARD' types | grep -q 'public.tiff'"
+check "…and marked as ClipStack's own paste" sh -c "osascript -l JavaScript '$ROOT/tests/pasteboard.js' '$CLIPSTACK_PASTEBOARD' types | grep -q 'com.clipstack.restored'"
+
+cs copy "$(idx '🖼 Image 16×16')" 2>/dev/null
+eq    "an image copied with an address pastes both" "$(pb get)" "https://example.com/cat.png"
+
+cs copy "$(idx '🎬 Video')" 2>/dev/null
+TYPES="$(pb types)"
+check "copy puts the video back as data…"    sh -c "echo '$TYPES' | grep -q 'public.mpeg-4'"
+check "…and as a file apps can take"         sh -c "echo '$TYPES' | grep -q 'public.file-url'"
+
+cs copy "$(idx '🗂 2 files')" 2>/dev/null
+eq    "copy puts files back as the files"    "$(pb urls)" "[\"$FIX/files/holiday.mov\",\"$FIX/files/photo.png\"]"
+
+cs merge "$(idx 'some text')" "$(idx '🖼 Image 40×30')" "$(idx '🖼 Image 20×10')" >/dev/null
+eq    "merging text and images inlines the pictures (RTFD)" "$(pb attachments)" "2"
+check "…and in HTML for browsers"            sh -c "osascript -l JavaScript '$ROOT/tests/pasteboard.js' '$CLIPSTACK_PASTEBOARD' types | grep -q 'public.html'"
+eq    "…with the text on its own for plain fields" "$(pb get)" "some text"
+
+cs merge "$(idx '🎬 holiday.mov')" "$(idx '🗂 2 files')" >/dev/null
+eq    "merging files pastes all of them"     "$(pb urls)" "[\"$FIX/files/holiday.mov\",\"$FIX/files/holiday.mov\",\"$FIX/files/photo.png\"]"
+
+eq    "queue can hold images"                "$(cs queue "$(idx '🖼 Image 20×10')" "$(idx 'some text')")" "1/2"
+check "…the first goes on as an image"       sh -c "osascript -l JavaScript '$ROOT/tests/pasteboard.js' '$CLIPSTACK_PASTEBOARD' types | grep -q 'public.png'"
+cs next >/dev/null
+eq    "…then the text"                       "$(pb get)" "some text"
+
+# The Shortcuts path: labels in, clips out, even if a copy lands in between.
+LABELS="$(cs list --labels | python3 -c "import sys; s=sys.stdin.read().strip().split('@@CLIPSTACK@@'); print('@@CLIPSTACK@@'.join(l for l in s if 'Image 40×30' in l or 'some text' in l))")"
+start_watcher; copy_and_wait "copied while the picker was open" >/dev/null; stop_watcher
+printf '%s' "$LABELS" | cs merge --labels >/dev/null
+eq    "merge --labels finds the clips even after the numbers shift" "$(pb attachments):$(pb get)" "1:some text"
+printf '%s' "$LABELS" | cs queue --labels >/dev/null
+eq    "queue --labels works the same way"    "$(cs queue-status)" "1/2"
+
+N_MEDIA="$(media_files)"
+cs pin "$(idx '🖼 Image 40×30')" 2>/dev/null
+cs clear 2>/dev/null
+eq    "clear deletes unpinned images and videos, keeps pinned ones" "$(media_files)" "1"
+[ -f "$RED" ] && ok "…the pinned one is still there" || bad "…the pinned one is still there"
+
+reset; echo '{"pollSeconds": 0.1, "recordMedia": false}' > "$CLIPSTACK_HOME/config.json"; start_watcher
+pb data "public.png=$FIX/red.png" >/dev/null; sleep 0.4; copy_and_wait "after" >/dev/null
+eq    "recordMedia: false leaves images out" "$(cs list)" '["after"]'
+
+make_png "$FIX/big.png" 820 820 5        # about 2 MB
+reset; echo '{"pollSeconds": 0.1, "maxMediaMB": 1}' > "$CLIPSTACK_HOME/config.json"; start_watcher
+pb data "public.png=$FIX/big.png" >/dev/null; sleep 0.6; copy_and_wait "after" >/dev/null
+eq    "maxMediaMB skips an oversized image"  "$(cs list):$(media_files)" '["after"]:0'
+
+for i in 1 2 3; do make_png "$FIX/m$i.png" 450 450 $((10 + i)); done   # about 600 KB each
+reset; echo '{"pollSeconds": 0.1, "mediaBudgetMB": 1}' > "$CLIPSTACK_HOME/config.json"; start_watcher
+for i in 1 2 3; do copy_media "public.png=$FIX/m$i.png" || bad "setup m$i"; done
+eq    "the media budget keeps only what fits, newest first" "$(clip_count):$(media_files)" "1:1"
+
+reset; echo '{"pollSeconds": 0.1, "maxItems": 2}' > "$CLIPSTACK_HOME/config.json"; start_watcher
+copy_media "public.png=$FIX/red.png" >/dev/null
+copy_and_wait "one" >/dev/null; copy_and_wait "two" >/dev/null
+eq    "an image pushed out by maxItems has its file deleted" "$(media_files)" "0"
+
+# A big image, then two quick copies while it is still being stored: polling
+# must carry on (or the first would be missed) and the order must hold.
+make_png "$FIX/huge.png" 4000 4000 9
+sips -s format tiff "$FIX/huge.png" --out "$FIX/huge.tiff" >/dev/null
+reset; echo '{"pollSeconds": 0.1}' > "$CLIPSTACK_HOME/config.json"; start_watcher
+T0=$(python3 -c 'import time; print(time.time())')
+pb data "public.tiff=$FIX/huge.tiff" >/dev/null; sleep 0.3
+for n in 1 2 3; do pb set "copied during $n" >/dev/null; sleep 0.15; done
+for _ in $(seq 150); do [ "$(clip_count 2>/dev/null)" == "4" ] && break; sleep 0.1; done
+T1=$(python3 -c 'import time; print(time.time())')
+eq    "copies made while a big image is being stored are all caught, in order" \
+      "$(cs list)" '["copied during 3","copied during 2","copied during 1","🖼 Image 4000×4000"]'
+echo "        (the image: a $(( $(stat -f %z "$FIX/huge.tiff") / 1048576 )) MB TIFF, stored as PNG in the background; all three recorded after $(python3 -c "print(round($T1 - $T0, 2))")s)"
+stop_watcher
+rm -rf "$FIX"
+
+# ---------------------------------------------------------------------------
 echo "==> Config"
 reset
 echo '{"pollSeconds": 0.1, "maxItems": 3}' > "$CLIPSTACK_HOME/config.json"; start_watcher
@@ -245,6 +402,8 @@ for name, wf in wfs.items():
     if 'Multiple' in name:
         chooser = next(a for a in wf['WFWorkflowActions'] if a['WFWorkflowActionIdentifier'].endswith('choosefromlist'))
         assert chooser['WFWorkflowActionParameters']['WFChooseFromListActionSelectMultiple'] is True
+        assert scripts[0].endswith('list --labels'), scripts[0]
+        assert scripts[-1].endswith(('merge --labels', 'queue --labels')), scripts[-1]
 "
 if command -v shortcuts >/dev/null; then
     check "signs them"                       sh -c "cd '$GEN' && CLIPSTACK_BIN=/opt/x/clipstack python3 make-shortcuts.py && ls '$GEN'/*.shortcut | wc -l | grep -q 3"

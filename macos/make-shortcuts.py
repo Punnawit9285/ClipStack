@@ -55,9 +55,13 @@ def workflow(actions):
 
 
 def pick_actions(prompt):
-    """Shared opening: read history, split it, let the user tick several."""
+    """Shared opening: list clips by label, let the user tick several.
+
+    The binary, not Shortcuts, then puts the chosen clips on the clipboard, so
+    images, videos and files come back as themselves rather than as text.
+    """
     return [
-        shell(f'"{CLI}" list --sep'),
+        shell(f'"{CLI}" list --labels'),
         action("is.workflow.actions.text.split", {
             "WFTextSeparator": "Custom",
             "WFTextCustomSeparator": SENTINEL,
@@ -69,23 +73,24 @@ def pick_actions(prompt):
     ]
 
 
-def build():
+def hand_to(command, prompt):
+    """Pick clips, then pass their labels to `clipstack <command> --labels`."""
     combine_uuid = str(uuid.uuid4()).upper()
-
-    # 1. Pick several clips, join them, put the result on the clipboard.
-    paste_multiple = workflow(pick_actions("Pick clips to paste") + [
-        action("is.workflow.actions.text.combine", {"WFTextSeparator": "New Lines"}),
-        action("is.workflow.actions.setclipboard", {}),
-    ])
-
-    # 2. Pick several clips and load them into the queue, in order.
-    queue_multiple = workflow(pick_actions("Queue clips in paste order") + [
+    return workflow(pick_actions(prompt) + [
         action("is.workflow.actions.text.combine", {
             "WFTextSeparator": "Custom",
             "WFTextCustomSeparator": SENTINEL,
         }, combine_uuid),
-        shell(f'"{CLI}" queue', stdin=output_of(combine_uuid, "Combined Text")),
+        shell(f'"{CLI}" {command} --labels', stdin=output_of(combine_uuid, "Combined Text")),
     ])
+
+
+def build():
+    # 1. Pick several clips; they are merged onto the clipboard.
+    paste_multiple = hand_to("merge", "Pick clips to paste")
+
+    # 2. Pick several clips and load them into the queue, in order.
+    queue_multiple = hand_to("queue", "Queue clips in paste order")
 
     # 3. Advance the queue by one.
     paste_next = workflow([shell(f'"{CLI}" next')])

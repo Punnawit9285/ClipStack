@@ -13,12 +13,16 @@ $ErrorActionPreference = 'Stop'
 
 $source = @'
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -30,13 +34,30 @@ public class Clip {
     public string App = "";
     public DateTime At = DateTime.Now;
     public bool Pinned = false;
+    // An image copied as data: its PNG file in Store.MediaDir.
+    public string Image = null;
+    public int Width = 0, Height = 0;
+    public long Bytes = 0;
+    // Files copied in Explorer (videos included), kept by reference, never copied.
+    public string[] Files = null;
+
+    /// What makes two clips the same, for de-duplication.
+    public string Key() {
+        if (Image != null) return "image:" + Image;
+        if (Files != null) return "files:" + string.Join("\n", Files);
+        return "text:" + Text;
+    }
 
     public string Label(int width) {
         string flat = Text.Replace("\r", " ").Replace("\n", "  ").Replace("\t", " ");
         while (flat.Contains("  ")) flat = flat.Replace("  ", " ");
         flat = flat.Trim();
-        if (flat.Length <= width) return flat;
-        return flat.Substring(0, width - 1) + "\u2026";   // ellipsis
+        string line;
+        if (Image != null) line = "[Image " + Width + "x" + Height + "]" + (flat.Length > 0 ? " " + flat : "");
+        else if (Files != null) line = DescribeFiles(Files);
+        else line = flat;
+        if (line.Length <= width) return line;
+        return line.Substring(0, width - 1) + "\u2026";   // ellipsis
     }
 
     public string Meta() {
@@ -48,6 +69,31 @@ public class Clip {
         else age = ((int)d.TotalDays) + "d ago";
         return string.IsNullOrEmpty(App) ? age : App + " \u00B7 " + age;   // middle dot
     }
+
+    static readonly string[] VideoExt = { ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".webm", ".mpg", ".mpeg", ".3gp" };
+    static readonly string[] ImageExt = { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic" };
+    static readonly string[] AudioExt = { ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma" };
+
+    static string FileName(string path) {
+        int cut = Math.Max(path.LastIndexOf('\\'), path.LastIndexOf('/'));
+        return cut >= 0 ? path.Substring(cut + 1) : path;
+    }
+
+    /// Chosen from the extension alone, so listing never touches the disk.
+    public static string Kind(string path) {
+        string name = FileName(path).ToLowerInvariant();
+        int dot = name.LastIndexOf('.');
+        string ext = dot >= 0 ? name.Substring(dot) : "";
+        if (VideoExt.Contains(ext)) return "Video";
+        if (ImageExt.Contains(ext)) return "Image";
+        if (AudioExt.Contains(ext)) return "Audio";
+        return "File";
+    }
+
+    public static string DescribeFiles(string[] files) {
+        if (files.Length == 1) return "[" + Kind(files[0]) + "] " + FileName(files[0]);
+        return "[" + files.Length + " files] " + string.Join(", ", files.Select(FileName));
+    }
 }
 
 public static class Store {
@@ -55,10 +101,16 @@ public static class Store {
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipStack");
     static string HistoryFile { get { return Path.Combine(Dir, "history.txt"); } }
     static string QueueFile { get { return Path.Combine(Dir, "queue.txt"); } }
+    public static string MediaDir { get { return Path.Combine(Dir, "media"); } }
 
     public static List<Clip> Items = new List<Clip>();
     public static int MaxItems = 500;
     public static int MaxChars = 1000000;
+    public static bool RecordMedia = true;
+    public static long MaxMediaBytes = 100L * 1024 * 1024;     // skip bigger images
+    public static long MediaBudget = 1024L * 1024 * 1024;      // oldest images go first beyond this
+    // A file the recorder has just written may not be in history yet; leave it be.
+    public static int PruneGraceSeconds = 60;
 
     static string Enc(string s) {
         return string.IsNullOrEmpty(s) ? "" : Convert.ToBase64String(Encoding.UTF8.GetBytes(s));
@@ -68,22 +120,53 @@ public static class Store {
         try { return Encoding.UTF8.GetString(Convert.FromBase64String(s)); } catch { return ""; }
     }
 
+    // One clip per line: ticks|pinned|app|text[|kind|payload], text fields base64.
+    // kind "i" = image (file;width;height;bytes), "f" = files (base64 of the paths).
+    static string Serialize(Clip c) {
+        StringBuilder sb = new StringBuilder();
+        sb.Append(c.At.Ticks).Append('|').Append(c.Pinned ? '1' : '0').Append('|')
+          .Append(Enc(c.App)).Append('|').Append(Enc(c.Text));
+        if (c.Image != null)
+            sb.Append("|i|").Append(c.Image).Append(';').Append(c.Width).Append(';')
+              .Append(c.Height).Append(';').Append(c.Bytes);
+        else if (c.Files != null)
+            sb.Append("|f|").Append(Enc(string.Join("\n", c.Files)));
+        return sb.ToString();
+    }
+
+    static Clip Parse(string line) {
+        string[] p = line.Split('|');
+        if (p.Length < 4) return null;
+        long ticks;
+        if (!long.TryParse(p[0], out ticks)) return null;
+        Clip c = new Clip();
+        c.At = new DateTime(ticks);
+        c.Pinned = p[1] == "1";
+        c.App = Dec(p[2]);
+        c.Text = Dec(p[3]);
+        if (p.Length >= 6 && p[4] == "i") {
+            string[] m = p[5].Split(';');
+            if (m.Length < 4) return null;
+            c.Image = m[0];
+            int.TryParse(m[1], out c.Width);
+            int.TryParse(m[2], out c.Height);
+            long.TryParse(m[3], out c.Bytes);
+        } else if (p.Length >= 6 && p[4] == "f") {
+            c.Files = Dec(p[5]).Split('\n');
+        } else if (c.Text.Length == 0) {
+            return null;
+        }
+        return c;
+    }
+
     public static void Load() {
         Items.Clear();
         try {
             Directory.CreateDirectory(Dir);
             if (!File.Exists(HistoryFile)) return;
             foreach (string line in File.ReadAllLines(HistoryFile, Encoding.UTF8)) {
-                string[] p = line.Split('|');
-                if (p.Length < 4) continue;
-                long ticks;
-                if (!long.TryParse(p[0], out ticks)) continue;
-                Clip c = new Clip();
-                c.At = new DateTime(ticks);
-                c.Pinned = p[1] == "1";
-                c.App = Dec(p[2]);
-                c.Text = Dec(p[3]);
-                if (c.Text.Length > 0) Items.Add(c);
+                Clip c = Parse(line);
+                if (c != null) Items.Add(c);
             }
         } catch { }
     }
@@ -92,51 +175,73 @@ public static class Store {
         try {
             Directory.CreateDirectory(Dir);
             StringBuilder sb = new StringBuilder();
-            foreach (Clip c in Items) {
-                sb.Append(c.At.Ticks).Append('|')
-                  .Append(c.Pinned ? '1' : '0').Append('|')
-                  .Append(Enc(c.App)).Append('|')
-                  .Append(Enc(c.Text)).Append('\n');
-            }
-            string tmp = HistoryFile + ".tmp";
-            File.WriteAllText(tmp, sb.ToString(), Encoding.UTF8);
-            if (File.Exists(HistoryFile)) File.Delete(HistoryFile);
-            File.Move(tmp, HistoryFile);
+            foreach (Clip c in Items) sb.Append(Serialize(c)).Append('\n');
+            WriteAtomically(HistoryFile, Encoding.UTF8.GetBytes(sb.ToString()));
         } catch { }
     }
 
-    /// Adds a clip, promoting an existing identical one instead of duplicating.
-    public static bool Add(string text, string app) {
-        if (string.IsNullOrEmpty(text) || text.Trim().Length == 0) return false;
-        if (text.Length > MaxChars) return false;
-        if (Items.Count > 0 && Items[0].Text == text) return false;
+    static void WriteAtomically(string path, byte[] data) {
+        string tmp = path + ".tmp";
+        File.WriteAllBytes(tmp, data);
+        if (File.Exists(path)) File.Delete(path);
+        File.Move(tmp, path);
+    }
 
-        int idx = Items.FindIndex(c => c.Text == text);
+    public static bool Add(string text, string app) {
+        Clip c = new Clip();
+        c.Text = text ?? ""; c.App = app ?? "";
+        return Add(c);
+    }
+
+    /// Adds a clip, promoting an existing identical one instead of duplicating.
+    public static bool Add(Clip clip) {
+        if (clip.Image == null && clip.Files == null) {
+            if (clip.Text.Trim().Length == 0) return false;
+            if (clip.Text.Length > MaxChars) return false;
+        }
+        string key = clip.Key();
+        if (Items.Count > 0 && Items[0].Key() == key) return false;
+
+        int idx = Items.FindIndex(c => c.Key() == key);
         if (idx >= 0) {
             Clip existing = Items[idx];
             Items.RemoveAt(idx);
             existing.At = DateTime.Now;
-            if (!string.IsNullOrEmpty(app)) existing.App = app;
+            if (!string.IsNullOrEmpty(clip.App)) existing.App = clip.App;
             Items.Insert(0, existing);
         } else {
-            Clip c = new Clip();
-            c.Text = text; c.App = app ?? ""; c.At = DateTime.Now;
-            Items.Insert(0, c);
+            clip.At = DateTime.Now;
+            Items.Insert(0, clip);
         }
-        Trim();
+        bool dropped = Trim();
         Save();
+        if (dropped) PruneMedia();
         return true;
     }
 
-    static void Trim() {
-        if (Items.Count <= MaxItems) return;
+    /// Moves a clip to the top, e.g. when ClipStack itself pasted it back.
+    public static bool Promote(string key) {
+        Clip c = Items.Find(x => x.Key() == key);
+        return c != null && Add(c);
+    }
+
+    /// Enforces MaxItems and the media budget. Returns true if anything went.
+    static bool Trim() {
         List<Clip> kept = new List<Clip>();
         int unpinned = 0;
+        long media = 0;
         foreach (Clip c in Items) {
             if (c.Pinned) { kept.Add(c); continue; }
-            if (unpinned < MaxItems) { kept.Add(c); unpinned++; }
+            if (++unpinned > MaxItems) continue;
+            if (c.Image != null) {
+                media += c.Bytes;
+                if (media > MediaBudget) continue;   // newest first, so older images go
+            }
+            kept.Add(c);
         }
+        bool dropped = kept.Count != Items.Count;
         Items = kept;
+        return dropped;
     }
 
     /// Most recent first, with pinned clips hoisted to the top.
@@ -148,36 +253,146 @@ public static class Store {
         return pinned;
     }
 
+    public static void Remove(Clip c) {
+        Items.Remove(c);
+        Save();
+        PruneMedia();
+    }
+
     public static void ClearUnpinned() {
         Items = Items.Where(c => c.Pinned).ToList();
         Save();
-        SaveQueue(new List<string>(), 0);
+        SaveQueue(new List<Clip>(), 0);
+        PruneMedia();
+    }
+
+    // ---- images ----
+
+    /// Stores PNG bytes under a name taken from their content (so the same
+    /// image is stored once) and returns a clip for them, or null when too big.
+    /// Touches only the media folder, so it is safe on the recorder thread.
+    public static Clip SaveImage(byte[] png, string text, string app) {
+        if (png == null || png.Length == 0 || png.Length > MaxMediaBytes) return null;
+        int w, h;
+        if (!PngSize(png, out w, out h)) return null;
+        string name;
+        using (SHA256 sha = SHA256.Create()) {
+            byte[] hash = sha.ComputeHash(png);
+            name = string.Concat(hash.Take(8).Select(b => b.ToString("x2"))) + ".png";
+        }
+        Directory.CreateDirectory(MediaDir);
+        string path = Path.Combine(MediaDir, name);
+        if (!File.Exists(path)) WriteAtomically(path, png);
+        Clip c = new Clip();
+        c.Image = name; c.Width = w; c.Height = h; c.Bytes = png.Length;
+        c.Text = text ?? ""; c.App = app ?? "";
+        return c;
+    }
+
+    /// Reads the size from the PNG header, without decoding any pixels.
+    public static bool PngSize(byte[] png, out int w, out int h) {
+        w = h = 0;
+        if (png.Length < 24 || png[0] != 0x89 || png[1] != (byte)'P') return false;
+        w = (png[16] << 24) | (png[17] << 16) | (png[18] << 8) | png[19];
+        h = (png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23];
+        return w > 0 && h > 0;
+    }
+
+    public static byte[] ReadImage(Clip c) {
+        try { return File.ReadAllBytes(Path.Combine(MediaDir, c.Image)); } catch { return null; }
+    }
+
+    /// Deletes stored images that neither history nor the paste queue uses.
+    public static void PruneMedia() {
+        try {
+            if (!Directory.Exists(MediaDir)) return;
+            HashSet<string> used = new HashSet<string>(Items.Where(c => c.Image != null).Select(c => c.Image));
+            int index;
+            foreach (Clip c in LoadQueue(out index)) if (c.Image != null) used.Add(c.Image);
+            foreach (string path in Directory.GetFiles(MediaDir)) {
+                string name = Path.GetFileName(path);
+                if (used.Contains(name) || name.EndsWith(".tmp")) continue;
+                if ((DateTime.Now - File.GetLastWriteTime(path)).TotalSeconds < PruneGraceSeconds) continue;
+                File.Delete(path);
+            }
+        } catch { }
     }
 
     // ---- paste queue ----
 
-    public static void SaveQueue(List<string> items, int index) {
+    public static void SaveQueue(List<Clip> items, int index) {
         try {
             Directory.CreateDirectory(Dir);
             StringBuilder sb = new StringBuilder();
             sb.Append(index).Append('\n');
-            foreach (string s in items) sb.Append(Enc(s)).Append('\n');
+            foreach (Clip c in items) sb.Append(Serialize(c)).Append('\n');
             File.WriteAllText(QueueFile, sb.ToString(), Encoding.UTF8);
         } catch { }
     }
 
-    public static List<string> LoadQueue(out int index) {
+    public static List<Clip> LoadQueue(out int index) {
         index = 0;
-        List<string> items = new List<string>();
+        List<Clip> items = new List<Clip>();
         try {
             if (!File.Exists(QueueFile)) return items;
             string[] lines = File.ReadAllLines(QueueFile, Encoding.UTF8);
             if (lines.Length == 0) return items;
             int.TryParse(lines[0], out index);
-            for (int i = 1; i < lines.Length; i++)
-                if (lines[i].Length > 0) items.Add(Dec(lines[i]));
+            for (int i = 1; i < lines.Length; i++) {
+                Clip c = Parse(lines[i]);
+                if (c != null) items.Add(c);
+            }
         } catch { }
         return items;
+    }
+}
+
+/// CF_HTML, the clipboard's HTML format: a header of byte offsets, then the page.
+public static class Html {
+    public static string Escape(string s) {
+        return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;")
+                .Replace("\r\n", "<br>").Replace("\n", "<br>");
+    }
+
+    public static string Wrap(string fragment) {
+        const string header = "Version:0.9\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\n"
+                            + "StartFragment:{2:D10}\r\nEndFragment:{3:D10}\r\n";
+        const string pre = "<html><body><!--StartFragment-->";
+        const string post = "<!--EndFragment--></body></html>";
+        int startHtml = string.Format(header, 0, 0, 0, 0).Length;
+        int startFragment = startHtml + Encoding.UTF8.GetByteCount(pre);
+        int endFragment = startFragment + Encoding.UTF8.GetByteCount(fragment);
+        int endHtml = endFragment + Encoding.UTF8.GetByteCount(post);
+        return string.Format(header, startHtml, endHtml, startFragment, endFragment) + pre + fragment + post;
+    }
+}
+
+/// Records clips on one background thread, in the order they were copied, so
+/// encoding and hashing a big image never makes the picker or tray stutter.
+/// Each job returns what to do next on the UI thread, where Store lives.
+public static class Recorder {
+    static BlockingCollection<Func<MethodInvoker>> jobs = new BlockingCollection<Func<MethodInvoker>>();
+    static Control ui;
+
+    public static void Start(Control uiThread) {
+        ui = uiThread;
+        Thread t = new Thread(delegate() {
+            foreach (Func<MethodInvoker> job in jobs.GetConsumingEnumerable()) {
+                try {
+                    MethodInvoker then = job();
+                    if (then != null) ui.BeginInvoke(then);
+                } catch { }
+            }
+        });
+        t.IsBackground = true;
+        t.Priority = ThreadPriority.BelowNormal;
+        t.Start();
+    }
+
+    public static void Enqueue(Func<MethodInvoker> job) { jobs.Add(job); }
+
+    public static void Add(Clip c) {
+        Enqueue(delegate { return delegate { Store.Add(c); }; });
     }
 }
 
@@ -208,10 +423,14 @@ public static class Native {
 }
 
 public static class Clip2 {
+    /// Set on everything ClipStack puts back on the clipboard, holding the
+    /// clip's key, so the recorder just promotes it instead of storing it again.
+    public const string RestoredFormat = "ClipStack.Restored";
+
     /// Clipboard calls fail if another app holds the clipboard open, so retry.
-    public static string GetText() {
+    public static IDataObject GetData() {
         for (int i = 0; i < 6; i++) {
-            try { return Clipboard.ContainsText() ? Clipboard.GetText() : null; }
+            try { return Clipboard.GetDataObject(); }
             catch { Thread.Sleep(40); }
         }
         return null;
@@ -224,6 +443,72 @@ public static class Clip2 {
             catch { Thread.Sleep(40); }
         }
     }
+
+    static void Put(DataObject obj) {
+        try { Clipboard.SetDataObject(obj, true, 6, 40); } catch { }
+    }
+
+    /// Puts a clip back the way it was copied: text as text, an image as an
+    /// image, files as the files themselves.
+    public static void SetClip(Clip c) {
+        if (c.Image == null && c.Files == null) { SetText(c.Text); return; }
+        DataObject obj = new DataObject();
+        if (c.Files != null) {
+            StringCollection files = new StringCollection();
+            files.AddRange(c.Files);
+            obj.SetFileDropList(files);
+            obj.SetText(string.Join("\r\n", c.Files));
+        } else {
+            byte[] png = Store.ReadImage(c);
+            if (png == null) { SetText(c.Text.Length > 0 ? c.Text : c.Label(200)); return; }
+            obj.SetData("PNG", false, new MemoryStream(png));   // keeps transparency
+            // The classic bitmap format too, for older apps; skipped for huge images.
+            if ((long)c.Width * c.Height <= 25000000) {
+                using (MemoryStream ms = new MemoryStream(png))
+                using (Bitmap tmp = new Bitmap(ms)) obj.SetImage(new Bitmap(tmp));
+            }
+            if (c.Text.Length > 0) obj.SetText(c.Text);
+        }
+        obj.SetData(RestoredFormat, c.Key());
+        Put(obj);
+    }
+
+    /// Pastes several clips as one: text joined; files all together; anything
+    /// with an image as HTML with the pictures inline (Word, Outlook, Gmail...),
+    /// plus the text on its own for plain fields.
+    public static void SetMerged(List<Clip> clips, string sep) {
+        if (clips.Count == 1) { SetClip(clips[0]); return; }
+        if (clips.TrueForAll(c => c.Image == null && c.Files == null)) {
+            SetText(string.Join(sep, clips.Select(c => c.Text)));
+            return;
+        }
+        DataObject obj = new DataObject();
+        if (clips.TrueForAll(c => c.Files != null)) {
+            StringCollection files = new StringCollection();
+            foreach (Clip c in clips) files.AddRange(c.Files);
+            obj.SetFileDropList(files);
+            obj.SetText(string.Join(sep, clips.Select(c => c.Text)));
+            Put(obj);
+            return;
+        }
+        StringBuilder html = new StringBuilder();
+        List<string> plain = new List<string>();
+        for (int i = 0; i < clips.Count; i++) {
+            Clip c = clips[i];
+            if (i > 0) html.Append(Html.Escape(sep));
+            byte[] png = c.Image != null ? Store.ReadImage(c) : null;
+            if (png != null) {
+                html.Append("<img src=\"data:image/png;base64,").Append(Convert.ToBase64String(png))
+                    .Append("\" width=\"").Append(c.Width).Append("\" height=\"").Append(c.Height).Append("\">");
+            } else {
+                html.Append(Html.Escape(c.Text));
+                plain.Add(c.Text);
+            }
+        }
+        obj.SetData(DataFormats.Html, Html.Wrap(html.ToString()));
+        if (plain.Count > 0) obj.SetText(string.Join(sep, plain));
+        Put(obj);
+    }
 }
 
 public class PickerForm : Form {
@@ -233,7 +518,7 @@ public class PickerForm : Form {
     ListView list;
     TextBox search;
     List<Clip> shown = new List<Clip>();
-    List<string> marks = new List<string>();   // marked clip texts, in the order ticked
+    List<string> marks = new List<string>();   // marked clip keys, in the order ticked
     IntPtr prevWindow;
     bool building = false;
 
@@ -309,17 +594,16 @@ public class PickerForm : Form {
 
     void OnItemChecked(object sender, ItemCheckedEventArgs e) {
         if (building) return;
-        string text = (string)e.Item.Tag;
-        if (e.Item.Checked) { if (!marks.Contains(text)) marks.Add(text); }
-        else marks.Remove(text);
+        string key = (string)e.Item.Tag;
+        if (e.Item.Checked) { if (!marks.Contains(key)) marks.Add(key); }
+        else marks.Remove(key);
         RenumberMarks();
     }
 
     /// Shows the tick order as a prefix, so a merge/queue order is visible.
     void RenumberMarks() {
         foreach (ListViewItem item in list.Items) {
-            string text = (string)item.Tag;
-            int at = marks.IndexOf(text);
+            int at = marks.IndexOf((string)item.Tag);
             Clip c = shown[item.Index];
             string prefix = at >= 0 ? (at + 1) + ". " : (c.Pinned ? "* " : "");
             item.Text = prefix + c.Label(110);
@@ -336,7 +620,7 @@ public class PickerForm : Form {
             .Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
         foreach (Clip c in Store.Ordered()) {
-            string hay = (c.Text + " " + c.App).ToLowerInvariant();
+            string hay = (c.Text + " " + c.App + " " + c.Label(400)).ToLowerInvariant();
             bool ok = true;
             foreach (string t in terms) if (!hay.Contains(t)) { ok = false; break; }
             if (!ok) continue;
@@ -344,8 +628,8 @@ public class PickerForm : Form {
             shown.Add(c);
             ListViewItem item = new ListViewItem((c.Pinned ? "* " : "") + c.Label(110));
             item.SubItems.Add(c.Meta());
-            item.Tag = c.Text;
-            item.Checked = marks.Contains(c.Text);
+            item.Tag = c.Key();
+            item.Checked = marks.Contains(c.Key());
             list.Items.Add(item);
         }
 
@@ -380,25 +664,27 @@ public class PickerForm : Form {
     }
 
     /// Marked clips in tick order, or the highlighted one when nothing is marked.
-    List<string> Chosen() {
-        if (marks.Count > 0) return new List<string>(marks);
-        List<string> one = new List<string>();
-        Clip c = Current();
-        if (c != null) one.Add(c.Text);
-        return one;
+    List<Clip> Chosen() {
+        List<Clip> chosen = new List<Clip>();
+        foreach (string key in marks) {
+            Clip c = Store.Items.Find(x => x.Key() == key);
+            if (c != null) chosen.Add(c);
+        }
+        if (chosen.Count == 0 && Current() != null) chosen.Add(Current());
+        return chosen;
     }
 
     void Commit(bool asQueue) {
-        List<string> chosen = Chosen();
+        List<Clip> chosen = Chosen();
         if (chosen.Count == 0) return;
 
         if (asQueue) {
             Store.SaveQueue(chosen, 1);
-            Clip2.SetText(chosen[0]);
+            Clip2.SetClip(chosen[0]);
             TrayApp.Notify("Queue started",
                 "1/" + chosen.Count + " on the clipboard. Ctrl+Shift+N for the next one.");
         } else {
-            Clip2.SetText(string.Join(Separator, chosen));
+            Clip2.SetMerged(chosen, Separator);
         }
         CloseAndPaste();
     }
@@ -441,9 +727,8 @@ public class PickerForm : Form {
         if (ctrl && key == Keys.D) {
             Clip c = Current();
             if (c != null) {
-                marks.Remove(c.Text);
-                Store.Items.Remove(c);
-                Store.Save();
+                marks.Remove(c.Key());
+                Store.Remove(c);
                 Rebuild();
             }
             return true;
@@ -451,7 +736,7 @@ public class PickerForm : Form {
 
         if (ctrl && key >= Keys.D1 && key <= Keys.D9) {
             int n = key - Keys.D1;
-            if (n < shown.Count) { Clip2.SetText(shown[n].Text); CloseAndPaste(); }
+            if (n < shown.Count) { Clip2.SetClip(shown[n]); CloseAndPaste(); }
             return true;
         }
 
@@ -501,17 +786,78 @@ public class MessageWindow : Form {
     }
 
     void CaptureClipboard() {
+        IDataObject data = Clip2.GetData();
+        if (data == null) return;
         try {
             // Password managers mark their clips with this format; honour it.
-            if (Clipboard.ContainsData("ExcludeClipboardContentFromMonitorProcessing")) return;
+            if (data.GetDataPresent("ExcludeClipboardContentFromMonitorProcessing")) return;
         } catch { }
 
         string app = Native.ForegroundAppName();
         string lower = (app ?? "").ToLowerInvariant();
         foreach (string s in SkipApps) if (lower.Contains(s)) return;
 
-        string text = Clip2.GetText();
-        if (text != null) Store.Add(text, app);
+        try {
+            if (data.GetDataPresent(Clip2.RestoredFormat)) {
+                string key = data.GetData(Clip2.RestoredFormat) as string;
+                if (key != null) Recorder.Enqueue(delegate { return delegate { Store.Promote(key); }; });
+                return;
+            }
+
+            // Files from Explorer (videos, photos, anything) are kept by
+            // reference: nothing is copied, whatever their size.
+            if (data.GetDataPresent(DataFormats.FileDrop)) {
+                string[] files = data.GetData(DataFormats.FileDrop) as string[];
+                if (files != null && files.Length > 0) {
+                    Clip c = new Clip();
+                    c.Files = files; c.Text = string.Join("\n", files); c.App = app ?? "";
+                    Recorder.Add(c);
+                    return;
+                }
+            }
+
+            string text = data.GetData(DataFormats.UnicodeText) as string;
+            bool hasImage = Store.RecordMedia &&
+                (data.GetDataPresent("PNG") || data.GetDataPresent(DataFormats.Bitmap));
+
+            // Text wins, except when it is just the address of a copied image.
+            if (!string.IsNullOrEmpty(text) && text.Trim().Length > 0 && (!hasImage || !IsJustAnAddress(text))) {
+                Clip c = new Clip();
+                c.Text = text; c.App = app ?? "";
+                Recorder.Add(c);
+                return;
+            }
+            if (!hasImage) return;
+
+            // Grab the image now (the clipboard can only be read on this thread);
+            // encode, hash and save it on the recorder thread.
+            MemoryStream pngStream = data.GetDataPresent("PNG") ? data.GetData("PNG") as MemoryStream : null;
+            byte[] png = pngStream != null ? pngStream.ToArray() : null;
+            Image bitmap = png == null ? data.GetData(DataFormats.Bitmap) as Image : null;
+            if (png == null && bitmap == null) return;
+            string alt = text, source = app;
+            Recorder.Enqueue(delegate {
+                byte[] bytes = png;
+                if (bytes == null) {
+                    using (MemoryStream ms = new MemoryStream()) {
+                        bitmap.Save(ms, ImageFormat.Png);
+                        bytes = ms.ToArray();
+                    }
+                    bitmap.Dispose();
+                }
+                Clip c = Store.SaveImage(bytes, alt, source);
+                if (c == null) return null;
+                return delegate { Store.Add(c); };
+            });
+        } catch { }
+    }
+
+    static bool IsJustAnAddress(string text) {
+        string t = text.Trim();
+        if (t.Any(char.IsWhiteSpace)) return false;
+        Uri uri;
+        return Uri.TryCreate(t, UriKind.Absolute, out uri)
+            && (uri.Scheme == "http" || uri.Scheme == "https" || uri.Scheme == "file" || uri.Scheme == "data");
     }
 
     public static void OpenPicker() {
@@ -526,13 +872,13 @@ public class MessageWindow : Form {
 
     public static void AdvanceQueue() {
         int index;
-        List<string> items = Store.LoadQueue(out index);
+        List<Clip> items = Store.LoadQueue(out index);
         if (items.Count == 0 || index >= items.Count) {
-            Store.SaveQueue(new List<string>(), 0);
+            Store.SaveQueue(new List<Clip>(), 0);
             TrayApp.Notify("Queue finished", "Nothing left to paste.");
             return;
         }
-        Clip2.SetText(items[index]);
+        Clip2.SetClip(items[index]);
         Store.SaveQueue(items, index + 1);
         TrayApp.Notify("ClipStack", (index + 1) + "/" + items.Count + " on the clipboard.");
     }
@@ -552,6 +898,7 @@ public class TrayApp : ApplicationContext {
     public TrayApp() {
         Store.Load();
         win = new MessageWindow();
+        Recorder.Start(win);
 
         icon = new NotifyIcon();
         icon.Icon = SystemIcons.Application;
