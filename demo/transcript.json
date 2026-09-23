@@ -1,0 +1,146 @@
+[
+ {
+  "kind": "title",
+  "text": "ClipStack — clipboard history with multi-clip paste"
+ },
+ {
+  "kind": "note",
+  "text": "Everything you copy is recorded in the background."
+ },
+ {
+  "kind": "copy",
+  "text": "Jane Ferrer"
+ },
+ {
+  "kind": "copy",
+  "text": "jane@acme.io"
+ },
+ {
+  "kind": "copy",
+  "text": "+44 7700 900112"
+ },
+ {
+  "kind": "copy",
+  "text": "Invoice #1042 — Acme Ltd, due 30 Sep"
+ },
+ {
+  "kind": "copy",
+  "text": "https://acme.io/orders/1042"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack list --pretty"
+ },
+ {
+  "kind": "out",
+  "text": "  0  https://acme.io/orders/1042 — Code\n  1  Invoice #1042 — Acme Ltd, due 30 Sep — Code\n  2  +44 7700 900112 — Code\n  3  jane@acme.io — Code\n  4  Jane Ferrer — Code"
+ },
+ {
+  "kind": "note",
+  "text": "Merge: pick several clips, paste them once."
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack merge 4 3 2"
+ },
+ {
+  "kind": "out",
+  "text": "copied 3 clips"
+ },
+ {
+  "kind": "clip",
+  "text": "Jane Ferrer\njane@acme.io\n+44 7700 900112"
+ },
+ {
+  "kind": "note",
+  "text": "Queue: paste them into different fields, one after another."
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack list --pretty -n 6"
+ },
+ {
+  "kind": "out",
+  "text": "  0  Jane Ferrer ⏎ jane@acme.io ⏎ +44 7700 900112 — Code\n  1  https://acme.io/orders/1042 — Code\n  2  Invoice #1042 — Acme Ltd, due 30 Sep — Code\n  3  +44 7700 900112 — Code\n  4  jane@acme.io — Code\n  5  Jane Ferrer — Code"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack queue 5 4 3"
+ },
+ {
+  "kind": "out",
+  "text": "1/3"
+ },
+ {
+  "kind": "clip",
+  "text": "Jane Ferrer"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack next"
+ },
+ {
+  "kind": "out",
+  "text": "2/3"
+ },
+ {
+  "kind": "clip",
+  "text": "jane@acme.io"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack next"
+ },
+ {
+  "kind": "out",
+  "text": "3/3"
+ },
+ {
+  "kind": "clip",
+  "text": "+44 7700 900112"
+ },
+ {
+  "kind": "note",
+  "text": "Search, then copy by the number it shows."
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack search acme --pretty"
+ },
+ {
+  "kind": "out",
+  "text": "  1  jane@acme.io — Code\n  3  Jane Ferrer ⏎ jane@acme.io ⏎ +44 7700 900112 — Code\n  4  https://acme.io/orders/1042 — Code\n  5  Invoice #1042 — Acme Ltd, due 30 Sep — Code"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack copy 5"
+ },
+ {
+  "kind": "out",
+  "text": "copied #5"
+ },
+ {
+  "kind": "clip",
+  "text": "Invoice #1042 — Acme Ltd, due 30 Sep"
+ },
+ {
+  "kind": "note",
+  "text": "Password managers mark secrets as concealed; those are never recorded."
+ },
+ {
+  "kind": "copy",
+  "text": "••••••••  (from a password manager)"
+ },
+ {
+  "kind": "cmd",
+  "text": "clipstack search hunter2 --pretty"
+ },
+ {
+  "kind": "out",
+  "text": "(no matches)"
+ },
+ {
+  "kind": "note",
+  "text": "clipstack pick does all of this from a dialog — tick as many as you like."
+ }
+]

@@ -1,0 +1,23 @@
+<!--
+  Compiles the C# inside windows/ClipStack.ps1 the way Windows PowerShell 5.1's
+  Add-Type does: C# 5 against .NET Framework 4.8. Builds on macOS/Linux too,
+  thanks to the reference-assembly package. Used by tests/check-windows.sh.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>5</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- check-windows.sh copies this project next to the extracted ClipStack.cs -->
+    <Compile Include="ClipStack.cs" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

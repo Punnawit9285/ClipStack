@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+.DS_Store
+
+# Written by macos/install.sh. They contain the path of your installed binary,
+# so they are generated per machine rather than shared.
+macos/*.shortcut
+*.unsigned.shortcut
+__pycache__/
