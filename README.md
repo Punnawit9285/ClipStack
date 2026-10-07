@@ -7,19 +7,29 @@ Everything you copy is recorded in the background. When you need something back,
 open the picker, tick as many clips as you want, and either merge them into one
 paste or queue them to paste one after another.
 
-Runs on **macOS**, **Windows**, and **iPhone / iPad** (through the Shortcuts app).
+<p align="center">
+  <img src="demo/picker-macos.png" alt="The ClipStack picker on a Mac: a search field, an image with its thumbnail, and two clips ticked, numbered 1 and 2" width="600"><br>
+  <sub>Press ⌘⇧V anywhere. Tick clips with Tab — they paste in the order you tick them.</sub>
+</p>
+
+## Download
+
+| | Download | Then |
+|---|---|---|
+| **Mac** (macOS 13+) | [**ClipStack-macOS.dmg**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack-macOS.dmg) | Open it and double-click ClipStack. It moves itself to Applications, starts at login and lives in the menu bar. Press **⌘⇧V**. |
+| **Windows** 10 and 11 | [**ClipStack.exe**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.exe) | Double-click it. It installs itself (no admin rights needed), starts with Windows and sits in the notification area. Press **Ctrl+Shift+V**. |
+| **iPhone / iPad** | [**ClipStack-iOS-Shortcuts.zip**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack-iOS-Shortcuts.zip) | Open it in Files, then tap each shortcut and **Add Shortcut**. See [iPhone & iPad](#iphone--ipad). |
+
+The first time, macOS and Windows each ask once whether to open an app from the
+internet, because these downloads aren't signed with a paid developer
+certificate. [Here's what to click.](#opening-it-the-first-time)
 
 <p align="center">
   <img src="demo/demo.svg" alt="Terminal demo: copies are recorded, three are merged into one paste, then queued and pasted one by one; a screenshot and a video file are recorded and the image is pasted back as an image" width="668">
 </p>
 
-<p align="center">
-  <img src="demo/picker-macos.png" alt="The macOS picker with three clips ticked" width="345"><br>
-  <sub>The picker on macOS (<code>clipstack pick</code>): tick several, press OK.</sub>
-</p>
-
-Replay the tour yourself with `./demo/demo.sh`. It uses a throwaway history and
-a private pasteboard, so your own clipboard is left alone.
+The command-line side, as a tour. Replay it with `./demo/demo.sh`; it uses a
+throwaway history and a private pasteboard, so your own clipboard is left alone.
 
 ---
 
@@ -52,45 +62,43 @@ clips:  "Jane Ferrer"  +  "jane@acme.io"  +  "+44 7700 900112"
 
 ## macOS
 
-Two pieces: a small background recorder, and the built-in **Shortcuts** app as
-the picker. Shortcuts has no "clipboard changed" trigger, so it cannot do the
-recording — but its `Choose from List` action has a *Select Multiple* toggle,
-which is exactly the picker this needs.
+**ClipStack.app** records everything you copy and lives in the menu bar (the
+clipboard icon). Nothing else to set up.
 
-### Install
+| Key | Does |
+|---|---|
+| `⌘⇧V` | Open your clipboard history, anywhere |
+| `⌃⌘V` | Paste the next clip in the queue |
 
-```sh
-./macos/install.sh
-```
+In the picker:
 
-That builds the binary to `~/.local/bin/clipstack`, installs a launch agent so
-the recorder starts at login, and generates three signed `.shortcut` files.
+| Key | Does |
+|---|---|
+| *type* | Search |
+| `↑` `↓` | Move |
+| `Tab`, or click the circle | Tick / untick — ticked clips are numbered in the order you tick them |
+| `Return` | Paste — the ticked clips together, or the highlighted one |
+| `⌥ Return` | Queue the ticked clips; `⌃⌘V` then loads them one at a time |
+| `⌘1` … `⌘9` | Paste that row straight away |
+| `⌘P` / `⌘⌫` | Pin / delete |
+| `Esc` | Clear the search, then close |
 
-Then, once:
+Picking puts the clips on the clipboard; press `⌘V` where you want them. Turn on
+**Paste Automatically** in the menu to skip that step (macOS asks you to allow
+ClipStack under Privacy & Security › Accessibility once).
 
-1. Double-click each file in `macos/` and click **Add Shortcut**:
-   - `ClipStack - Paste Multiple.shortcut` ← the main one
-   - `ClipStack - Queue Multiple.shortcut`
-   - `ClipStack - Paste Next.shortcut`
-2. In Shortcuts, select each one, open the ⓘ panel, and assign a key:
-   | Shortcut | Suggested key |
-   |---|---|
-   | Paste Multiple | `⌘⇧V` |
-   | Queue Multiple | `⌘⇧Q` |
-   | Paste Next | `⌘⇧N` |
-3. **Shortcuts → Settings → Advanced → Allow Running Scripts.**
-
-### If you'd rather skip Shortcuts
-
-The binary has its own picker built on AppleScript, no import required:
-
-```sh
-clipstack pick              # tick several, merged onto the clipboard
-clipstack pick --queue      # tick several, start a paste queue
-clipstack pick --join ", "  # merge with a different separator
-```
+The menu also has the merge separator (new line, blank line, comma, space, tab),
+**Keep Images and Videos**, **Open at Login**, **Clear History…** and
+**Settings…**, which opens the settings file described below.
 
 ### Command line
+
+The app is also a command-line tool. To use it from Terminal:
+
+```sh
+mkdir -p ~/.local/bin
+ln -s /Applications/ClipStack.app/Contents/MacOS/ClipStack ~/.local/bin/clipstack
+```
 
 ```sh
 clipstack list --pretty            # browse history
@@ -120,9 +128,17 @@ keys; the ones you leave out keep their defaults:
 }
 ```
 
-`listLimit` is how many clips the pickers offer. `ignoredBundleIDs` replaces the
-built-in list of password managers, so keep those in it. Restart the recorder
-afterwards: `launchctl kickstart -k gui/$UID/com.clipstack.watcher`.
+`listLimit` is how many clips the Shortcuts picker offers. `ignoredBundleIDs`
+replaces the built-in list of password managers, so keep those in it.
+
+The app reads four more:
+
+```json
+{ "pickerHotkey": "cmd+shift+v", "nextHotkey": "ctrl+cmd+v", "separator": "\n", "autoPaste": false }
+```
+
+Hotkeys are written like `cmd+shift+v` or `ctrl+opt+c`. The app picks up changes
+the next time you open its menu.
 
 The image and video settings are covered in the next section.
 
@@ -171,7 +187,21 @@ It is built to stay out of the way:
 Set `recordMedia` to `false` to keep text and files only. `clipstack status`
 shows how much space images and videos use.
 
-### Managing the recorder
+### Without the app
+
+If you'd rather run ClipStack from scripts, build it from source instead. This
+needs Swift (the Xcode Command Line Tools):
+
+```sh
+./macos/install.sh
+```
+
+That installs `~/.local/bin/clipstack`, starts the recorder at login with a
+launch agent, and writes three Shortcuts to `macos/`. Double-click them to add
+them, give them keys in Shortcuts (ⓘ › Add Keyboard Shortcut), and turn on
+Shortcuts › Settings › Advanced › Allow Running Scripts. `clipstack pick` opens
+a simple picker without Shortcuts. If you later install the app, it offers to
+turn this recorder off.
 
 ```sh
 launchctl bootout  gui/$UID/com.clipstack.watcher   # stop
@@ -179,6 +209,9 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clipstack.watcher.plist
 tail -f ~/Library/Logs/clipstack.log                # logs
 ./macos/uninstall.sh                                # remove
 ```
+
+To build the app yourself: `./macos/build-app.sh` (writes `dist/ClipStack.app`
+and the `.dmg`).
 
 ---
 
@@ -247,17 +280,19 @@ To rebuild the shortcuts after changing `ios/make-shortcuts.py`, run it on a Mac
 
 ## Windows
 
-One self-contained PowerShell file. Nothing to install — the C# inside it is
-compiled at launch by the compiler that ships with Windows.
+Download [**ClipStack.exe**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.exe) and double-click it. It copies
+itself to `%LOCALAPPDATA%\Programs\ClipStack`, starts with Windows, and shows
+its icon in the notification area. Downloading a newer version and running it
+upgrades in place.
 
-### Install
+The tray icon's menu has **Start with Windows** and **Uninstall ClipStack…**.
 
-Double-click **`windows\Install-ClipStack.cmd`**. It registers ClipStack to
-start with Windows and launches it. Look for the notification-area icon.
-
-To try it once without installing, run `windows\Run-ClipStack.cmd` — that keeps
-a console window open so any errors are visible. Only one copy runs at a time;
-starting another just says it's already running.
+**Prefer a script?** The same app is in `windows\ClipStack.ps1`, a single
+PowerShell file whose C# is compiled at launch by the compiler that ships with
+Windows. Double-click `windows\Install-ClipStack.cmd` to start it with Windows,
+or `windows\Run-ClipStack.cmd` to try it once with a console window that shows
+any errors. Only one copy runs at a time; starting another just says it's
+already running.
 
 ### Keys
 
@@ -324,8 +359,9 @@ To wipe everything: `clipstack clear` on macOS, the tray menu on Windows, or
 
 ```sh
 ./tests/test-macos.sh        # the real binary, end to end
+./tests/test-app.sh          # the Mac app's picker (opens it briefly)
 python3 tests/test-ios.py    # the generated iOS shortcuts, in a small interpreter
-./tests/check-windows.sh     # parses the PowerShell, compiles its C# for Windows PowerShell 5.1
+./tests/check-windows.sh     # parses the PowerShell, compiles its C# and ClipStack.exe, runs unit tests
 ```
 
 `test-macos.sh` runs against a throwaway data folder and a private pasteboard
@@ -337,12 +373,32 @@ skips whichever is missing; the C# compile works on macOS and Linux too.
 
 ## Troubleshooting
 
+### Opening it the first time
+
+ClipStack isn't signed with a paid Apple or Microsoft developer certificate, so
+each system asks once before opening it.
+
+**Mac.** Double-clicking ClipStack shows *"Apple could not verify ClipStack is
+free of malware…"*. Click **Done**, then open **System Settings › Privacy &
+Security**, scroll down, click **Open Anyway** next to ClipStack, and confirm.
+(On macOS 13 and 14 you can instead right-click ClipStack › **Open** › **Open**.)
+After that it opens normally, including at login.
+
+**Windows.** SmartScreen shows *"Windows protected your PC"*. Click **More info**,
+then **Run anyway**.
+
+### Other problems
+
 **macOS: a shortcut reports it can't run the script.** Turn on Shortcuts →
 Settings → Advanced → Allow Running Scripts. If it still fails, the Shortcuts
 sandbox is blocking the binary — use `clipstack pick` instead, which does the
 same job without Shortcuts.
 
-**macOS: nothing is being recorded.** Check the agent is up with
+**macOS: ⌘⇧V does nothing.** Check that the clipboard icon is in the menu bar.
+If ClipStack says the key is taken, another app uses it; pick different keys
+under Settings… (`pickerHotkey`, `nextHotkey`).
+
+**macOS: nothing is being recorded** (script install). Check the agent is up with
 `launchctl print gui/$UID/com.clipstack.watcher`, and read
 `~/Library/Logs/clipstack.log`.
 

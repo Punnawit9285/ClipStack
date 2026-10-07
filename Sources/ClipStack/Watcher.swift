@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// contents are only touched when something actually changed.
 final class Watcher {
     private let store: Store
-    private let config: Config
+    var config: Config
     private var lastChangeCount: Int
     /// A change whose contents weren't readable yet, and how often we've looked.
     private var pendingCount = -1
@@ -38,15 +38,20 @@ final class Watcher {
         self.lastChangeCount = pasteboard.changeCount
     }
 
-    func run() -> Never {
-        // Captured strongly on purpose: `run()` never returns, so the watcher
-        // must outlive this scope for the timer to keep firing.
+    /// Starts polling on the main run loop and returns; the app uses this.
+    func start() {
+        // Captured strongly on purpose: the timer keeps the watcher alive.
         let timer = Timer(timeInterval: config.pollSeconds, repeats: true) { _ in
             autoreleasepool { self.tick() }
         }
         timer.tolerance = config.pollSeconds / 4   // lets macOS coalesce wake-ups
         RunLoop.main.add(timer, forMode: .common)
         FileHandle.standardError.write("clipstack: watching pasteboard (every \(config.pollSeconds)s)\n".data(using: .utf8)!)
+    }
+
+    /// Polls forever; `clipstack watch` uses this.
+    func run() -> Never {
+        start()
         RunLoop.main.run()
         fatalError("run loop exited")
     }

@@ -2,7 +2,8 @@
 # Static checks for the Windows version that run on any OS:
 #   - windows/ClipStack.ps1 parses (needs pwsh)
 #   - it is pure ASCII, since Windows PowerShell 5.1 reads BOM-less scripts as ANSI
-#   - its C# compiles as C# 5 against .NET Framework 4.8 (needs the dotnet SDK)
+#   - its C# compiles as C# 5 against .NET Framework 4.8, its history logic passes
+#     unit tests, and ClipStack.exe builds (all need the dotnet SDK)
 # Set PWSH / DOTNET to point at binaries that aren't on PATH.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +48,13 @@ if [ -n "$DOTNET" ]; then
         echo "$out" | grep -E "FAIL|expected|got:|error" | sed 's/^/  /'
         echo "  FAIL  unit tests: $(echo "$out" | tail -1)"; FAIL=1
     fi
-else echo "  skip  C# compile and unit tests (no dotnet SDK)"; fi
+
+    # ClipStack.exe: the same C# plus its installer entry point (windows/app/).
+    if out="$(DOTNET="$DOTNET" "$ROOT/windows/build-exe.sh" 2>&1)" && [ -f "$ROOT/dist/ClipStack.exe" ]; then
+        echo "  ok    ClipStack.exe builds ($(echo "$out" | awk '{print $1}' | tail -1))"
+    else
+        echo "  FAIL  ClipStack.exe does not build:"; echo "$out" | grep -E "error|warning" | sort -u; FAIL=1
+    fi
+else echo "  skip  C# compile, unit tests and ClipStack.exe (no dotnet SDK)"; fi
 
 exit $FAIL

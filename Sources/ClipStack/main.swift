@@ -110,6 +110,12 @@ func startQueue(_ clips: [Clip]) {
 
 let config = Config.load()
 
+// Opened as ClipStack.app (from Finder, or at login) rather than run from a
+// terminal with a command: be the menu bar app.
+let launchedAsApp = ProcessInfo.processInfo.environment["CLIPSTACK_APP"] == "1"
+    || (Bundle.main.bundleURL.pathExtension == "app" && args.isEmpty && isatty(STDIN_FILENO) == 0)
+if launchedAsApp { ClipStackApp.run() }
+
 switch command {
 
 case "watch":

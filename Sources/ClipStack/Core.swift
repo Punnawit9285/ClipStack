@@ -39,6 +39,11 @@ struct Config: Codable {
     var recordMedia: Bool = true     // keep images and videos copied as data
     var maxMediaMB: Int = 100        // skip any single image or video bigger than this
     var mediaBudgetMB: Int = 1024    // beyond this, the oldest images and videos go first
+    // The app (ClipStack.app) only:
+    var pickerHotkey: String = "cmd+shift+v"
+    var nextHotkey: String = "ctrl+cmd+v"
+    var separator: String = "\n"    // between merged clips
+    var autoPaste: Bool = false      // press ⌘V after picking (needs Accessibility)
     var ignoredBundleIDs: [String] = [
         "com.apple.keychainaccess",
         "com.1password.1password",
@@ -77,6 +82,10 @@ extension Config {
         recordMedia = try c.decodeIfPresent(Bool.self, forKey: .recordMedia) ?? recordMedia
         maxMediaMB = try c.decodeIfPresent(Int.self, forKey: .maxMediaMB) ?? maxMediaMB
         mediaBudgetMB = try c.decodeIfPresent(Int.self, forKey: .mediaBudgetMB) ?? mediaBudgetMB
+        pickerHotkey = try c.decodeIfPresent(String.self, forKey: .pickerHotkey) ?? pickerHotkey
+        nextHotkey = try c.decodeIfPresent(String.self, forKey: .nextHotkey) ?? nextHotkey
+        separator = try c.decodeIfPresent(String.self, forKey: .separator) ?? separator
+        autoPaste = try c.decodeIfPresent(Bool.self, forKey: .autoPaste) ?? autoPaste
         ignoredBundleIDs = try c.decodeIfPresent([String].self, forKey: .ignoredBundleIDs) ?? ignoredBundleIDs
     }
 }
@@ -354,9 +363,22 @@ final class Store {
     /// Returns true when the clip with this key had its pin flag changed.
     @discardableResult
     func setPinned(key: String, pinned: Bool) -> Bool {
+        if let fresh = Store.readFromDisk() { history = fresh }
         guard let idx = history.items.firstIndex(where: { $0.key == key }) else { return false }
         history.items[idx].pinned = pinned
         save()
+        return true
+    }
+
+    /// Removes one clip (and its image or video, if nothing else uses it).
+    @discardableResult
+    func delete(key: String) -> Bool {
+        if let fresh = Store.readFromDisk() { history = fresh }
+        let before = history.items.count
+        history.items.removeAll { $0.key == key }
+        guard history.items.count != before else { return false }
+        save()
+        pruneMedia()
         return true
     }
 

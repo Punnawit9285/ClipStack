@@ -1,0 +1,33 @@
+<!--
+  Builds ClipStack.exe: the C# from windows/ClipStack.ps1 plus Main.cs.
+  Targets .NET Framework 4.8, which every Windows 10 and 11 PC already has,
+  and builds on macOS and Linux too. Use windows/build-exe.sh.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>ClipStack</AssemblyName>
+    <RootNamespace>ClipStack</RootNamespace>
+    <LangVersion>5</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <ApplicationIcon>ClipStack.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <StartupObject>ClipStack.AppMain</StartupObject>
+    <Product>ClipStack</Product>
+    <Description>Clipboard history with multi-clip paste</Description>
+    <Version>$(ClipStackVersion)</Version>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="ClipStack.cs" />
+    <Compile Include="Main.cs" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

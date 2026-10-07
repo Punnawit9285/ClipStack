@@ -892,6 +892,11 @@ public class MessageWindow : Form {
 }
 
 public class TrayApp : ApplicationContext {
+    // Set by ClipStack.exe before Program.Run: its own icon, and extra menu
+    // items (start with Windows, uninstall). The PowerShell version leaves them be.
+    public static Icon TrayIcon = null;
+    public static Action<ContextMenuStrip> ExtendMenu = null;
+
     static NotifyIcon icon;
     MessageWindow win;
 
@@ -901,7 +906,7 @@ public class TrayApp : ApplicationContext {
         Recorder.Start(win);
 
         icon = new NotifyIcon();
-        icon.Icon = SystemIcons.Application;
+        icon.Icon = TrayIcon ?? SystemIcons.Application;
         icon.Text = "ClipStack - Ctrl+Shift+V";
         icon.Visible = true;
         icon.DoubleClick += delegate { MessageWindow.OpenPicker(); };
@@ -920,6 +925,7 @@ public class TrayApp : ApplicationContext {
         menu.Items.Add(sep);
 
         menu.Items.Add("Clear history (keeps pinned)", null, delegate { Store.ClearUnpinned(); });
+        if (ExtendMenu != null) ExtendMenu(menu);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, delegate { Shutdown(); });
         icon.ContextMenuStrip = menu;
