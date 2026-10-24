@@ -6,6 +6,11 @@ shortcut you trigger (Back Tap, the Action Button, a widget, Control Center or
 the share sheet). Everything else — ticking several clips, merging them, or
 queueing them — works as on the Mac. Text, images and videos all work.
 
+"ClipStack" does all of it from one menu, so installing is a single Add
+Shortcut; shared to from the share sheet, it saves straight away. The
+"ClipStack iOS - …" shortcuts each do one of those jobs, for a Back Tap or a
+widget that should act without a menu. They all share the same history.
+
 History lives in the Shortcuts folder (iCloud Drive › Shortcuts › ClipStack, or
 On My iPhone › Shortcuts › ClipStack when iCloud Drive is off), one text file
 with clips separated by a sentinel, newest first:
@@ -41,6 +46,9 @@ MEDIA_LINE = rf"(?:{IMAGE}|{VIDEO}) .* — ([0-9a-fA-F]{{12}}\.\w+)"
 MAX_CLIPS = 200
 OUT = os.path.dirname(os.path.abspath(__file__))
 PREFIX = "ClipStack iOS - "
+ALL_IN_ONE = "ClipStack"
+# What ClipStack's menu offers, in order.
+MENU = ["Save Clipboard", "Paste Multiple", "Queue Multiple", "Paste Next", "Clear History"]
 
 # Object replacement character: marks where a variable sits inside a text field.
 VAR = "\ufffc"
@@ -87,10 +95,14 @@ def var(value):
 # --- actions -----------------------------------------------------------------
 
 class Flow:
-    """Collects actions. Each helper returns a reference to its output."""
+    """Collects actions. Each helper returns a reference to its output.
 
-    def __init__(self):
+    `how_to_save` finishes "Copy something, then …", for when history is empty.
+    """
+
+    def __init__(self, how_to_save=f"run “{PREFIX}Save”"):
         self.actions = []
+        self.how_to_save = how_to_save
 
     def add(self, identifier, params=None, output_name=None):
         p = dict(params or {})
@@ -157,12 +169,13 @@ class Flow:
             "WFReplaceTextCaseSensitive": True,
         }, "Updated Text")
 
-    def split(self, source):
-        return self.add("is.workflow.actions.text.split", {
-            "text": text(source),
-            "WFTextSeparator": "Custom",
-            "WFTextCustomSeparator": SENTINEL,
-        }, "Split Text")
+    def split(self, source, separator=SENTINEL):
+        params = {"text": text(source)}
+        if separator == "\n":
+            params["WFTextSeparator"] = "New Lines"
+        else:
+            params.update({"WFTextSeparator": "Custom", "WFTextCustomSeparator": separator})
+        return self.add("is.workflow.actions.text.split", params, "Split Text")
 
     def combine(self, source, separator=SENTINEL):
         params = {"text": var(output(source))}
@@ -180,19 +193,22 @@ class Flow:
             "WFItemRangeEnd": count,
         }, "Items in Range")
 
-    def choose(self, source, prompt):
+    def choose(self, source, prompt, multiple=True):
         return self.add("is.workflow.actions.choosefromlist", {
             "WFInput": var(output(source)),
             "WFChooseFromListActionPrompt": prompt,
-            "WFChooseFromListActionSelectMultiple": True,
+            "WFChooseFromListActionSelectMultiple": multiple,
         }, "Chosen Item")
 
     def count(self, source, what="Items"):
         return self.add("is.workflow.actions.count", {
-            "Input": var(output(source)), "WFCountType": what}, "Count")
+            "Input": var(value(source)), "WFCountType": what}, "Count")
 
     def copy(self, source):
         self.add("is.workflow.actions.setclipboard", {"WFInput": var(value(source))})
+
+    def get_clipboard(self):
+        return self.add("is.workflow.actions.getclipboard", {}, "Clipboard")
 
     def notify(self, *body):
         self.add("is.workflow.actions.notification", {
@@ -304,8 +320,7 @@ class Flow:
 
     def done(self, group):
         self.otherwise(group)
-        self.alert("ClipStack is empty",
-                   "Copy something, then run “ClipStack iOS - Save” to add it to your history.")
+        self.alert("ClipStack is empty", f"Copy something, then {self.how_to_save} to add it to your history.")
         self.end_if(group)
 
 
@@ -335,24 +350,25 @@ def workflow(flow, *, share_sheet=False, clipboard_when_no_input=False):
 
 
 # --- the shortcuts -------------------------------------------------------------
+# Each job adds its actions to a Flow, so the single-purpose shortcuts and
+# ClipStack's menu are built from the same steps.
 
-def save():
-    """Adds the clipboard (or whatever is shared to it) to the top of history.
+def add_save(f, source):
+    """Adds `source` (the clipboard, or whatever was shared) to the top of history.
 
     Images and videos are saved once each in MEDIA, named by a hash of their
     content, and appear in history as a line naming that file.
     """
-    f = Flow()
-    ext = f.file_detail(SHORTCUT_INPUT, "File Extension")   # text arrives as a .txt file
+    ext = f.file_detail(source, "File Extension")   # text arrives as a .txt file
     kind = f.replace(ext, rf"(?i)\A(?:{IMAGE_EXT})\z", IMAGE, regex=True)
     kind = f.replace(kind, rf"(?i)\A(?:{VIDEO_EXT})\z", VIDEO, regex=True)
     is_media = f.if_contains(kind, " ")      # "🖼 Image" / "🎬 Video"; an extension has no space
-    short = f.replace(f.sha256(SHORTCUT_INPUT), r"\A([0-9a-fA-F]{12})[\s\S]*\z", "$1", regex=True)
+    short = f.replace(f.sha256(source), r"\A([0-9a-fA-F]{12})[\s\S]*\z", "$1", regex=True)
     name = f.text(short, ".", ext)
-    f.save_file(text(MEDIA + "/", name), SHORTCUT_INPUT)
-    f.text(kind, " ", f.file_detail(SHORTCUT_INPUT, "File Size"), " — ", name)
+    f.save_file(text(MEDIA + "/", name), source)
+    f.text(kind, " ", f.file_detail(source, "File Size"), " — ", name)
     f.otherwise(is_media)
-    f.get_text(SHORTCUT_INPUT)
+    f.get_text(source)
     clip = f.end_if(is_media, result=True)
 
     group = f.if_not_empty(clip)
@@ -376,13 +392,11 @@ def save():
     f.otherwise(group)
     f.notify("Nothing to save — the clipboard is empty.")
     f.end_if(group)
-    return workflow(f, share_sheet=True, clipboard_when_no_input=True)
 
 
-def paste_multiple():
+def add_paste_multiple(f):
     """Tick several clips. Text is merged onto the clipboard, one per line; if
     any are images or videos, everything goes on as separate items instead."""
-    f = Flow()
     chosen, group = f.pick_from_history("Pick clips to merge")
     joined = f.combine(chosen, "\n")
     probe = f.replace(joined, "(?m)^" + MEDIA_LINE + "$", "@@MEDIA@@", regex=True)
@@ -394,12 +408,10 @@ def paste_multiple():
     f.notify("Merged ", f.count(chosen), " clips — ready to paste.")
     f.end_if(has_media)
     f.done(group)
-    return workflow(f)
 
 
-def queue_multiple():
+def add_queue_multiple(f):
     """Tick several clips; the first goes on the clipboard, the rest wait for Paste Next."""
-    f = Flow()
     chosen, group = f.pick_from_history("Pick clips to queue (pasted top to bottom)")
     first, rest = f.first_and_rest(f.combine(chosen))
     f.copy(f.resolve(first))
@@ -407,12 +419,10 @@ def queue_multiple():
     f.notify("Queued ", output(f.count(chosen)),
              " clips. The first is on the clipboard; run Paste Next for each of the others.")
     f.done(group)
-    return workflow(f)
 
 
-def paste_next():
+def add_paste_next(f):
     """Loads the next queued clip onto the clipboard."""
-    f = Flow()
     queue = f.read_file(QUEUE)
     group = f.if_not_empty(queue)
     first, rest = f.first_and_rest(queue)
@@ -422,12 +432,10 @@ def paste_next():
     f.otherwise(group)
     f.notify("The queue is empty.")
     f.end_if(group)
-    return workflow(f)
 
 
-def clear():
+def add_clear(f):
     """Empties history and the queue and deletes saved images and videos, after asking."""
-    f = Flow()
     f.alert("Clear ClipStack?", "This deletes your saved clips, images and videos, and the paste queue.",
             cancel=True)
     empty = f.text("")
@@ -438,16 +446,60 @@ def clear():
     f.delete(media)
     f.end_if(exists)
     f.notify("History cleared.")
+
+
+def single(add):
+    f = Flow()
+    add(f)
     return workflow(f)
+
+
+def save():
+    f = Flow()
+    add_save(f, SHORTCUT_INPUT)
+    return workflow(f, share_sheet=True, clipboard_when_no_input=True)
+
+
+def all_in_one():
+    """Every job from one menu. Shared to from the share sheet, it saves that
+    straight away. Otherwise it asks what to do, and reads the clipboard only
+    for Save, so the other choices never prompt to paste."""
+    f = Flow(how_to_save=f"run {ALL_IN_ONE} and choose {MENU[0]}")
+    # No "when there's no input, use the clipboard" here: an empty Shortcut
+    # Input is how a run from the share sheet is told apart from any other.
+    shared = f.if_greater(f.count(SHORTCUT_INPUT), 0)
+    f.text(MENU[0])
+    f.otherwise(shared)
+    f.choose(f.split(f.text("\n".join(MENU)), "\n"), ALL_IN_ONE, multiple=False)
+    choice = f.end_if(shared, result=True)
+
+    def save_it(f):
+        shared = f.if_greater(f.count(SHORTCUT_INPUT), 0)
+        f.get_variable(SHORTCUT_INPUT)
+        f.otherwise(shared)
+        f.get_clipboard()
+        add_save(f, f.end_if(shared, result=True))
+
+    jobs = [save_it, add_paste_multiple, add_queue_multiple, add_paste_next, add_clear]
+    groups = []
+    for item, add in zip(MENU, jobs):
+        if groups:
+            f.otherwise(groups[-1])
+        groups.append(f.if_begins(choice, item))
+        add(f)
+    for group in reversed(groups):
+        f.end_if(group)
+    return workflow(f, share_sheet=True)
 
 
 def build():
     return {
+        ALL_IN_ONE: all_in_one(),
         PREFIX + "Save": save(),
-        PREFIX + "Paste Multiple": paste_multiple(),
-        PREFIX + "Queue Multiple": queue_multiple(),
-        PREFIX + "Paste Next": paste_next(),
-        PREFIX + "Clear": clear(),
+        PREFIX + "Paste Multiple": single(add_paste_multiple),
+        PREFIX + "Queue Multiple": single(add_queue_multiple),
+        PREFIX + "Paste Next": single(add_paste_next),
+        PREFIX + "Clear": single(add_clear),
     }
 
 

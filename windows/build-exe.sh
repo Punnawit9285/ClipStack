@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-$(cat "$ROOT/VERSION")}"
 DOTNET="${DOTNET:-$(command -v dotnet)}"
-WORK="$(mktemp -d -t clipstack-exe)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/clipstack-exe.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 cp "$ROOT"/windows/app/{ClipStack.App.csproj,Main.cs,ClipStack.ico,app.manifest} "$WORK/"

@@ -231,6 +231,8 @@ class Runner:
         return text.replace(find, repl)
 
     def do_text_split(self, p):
+        if p["WFTextSeparator"] == "New Lines":
+            return self.resolve(p["text"]).split("\n")
         assert p["WFTextSeparator"] == "Custom"
         return self.resolve(p["text"]).split(p["WFTextCustomSeparator"])
 
@@ -255,9 +257,14 @@ class Runner:
 
     def do_choosefromlist(self, p):
         items = self.resolve(p["WFInput"])
-        assert p["WFChooseFromListActionSelectMultiple"] is True
         rows = self.d.picks.pop(0)
+        if not p["WFChooseFromListActionSelectMultiple"]:
+            assert len(rows) == 1
+            return items[rows[0]]
         return [items[r] for r in sorted(rows)]   # list order, whatever order they were ticked
+
+    def do_getclipboard(self, p):
+        return self.d.clipboard
 
     def do_setclipboard(self, p):
         item = self.resolve(p["WFInput"])
@@ -291,6 +298,7 @@ WF = gen.build()
 P = gen.PREFIX
 SAVE, MERGE, QUEUE, NEXT, CLEAR = (WF[P + n] for n in
                                    ("Save", "Paste Multiple", "Queue Multiple", "Paste Next", "Clear"))
+ALL = WF[gen.ALL_IN_ONE]
 H, Q = gen.HISTORY, gen.QUEUE
 PASS = FAIL = 0
 
@@ -445,6 +453,44 @@ check("Clear deletes the saved images and videos", [k for k in d.files if k.star
 d = Device()
 d.run(CLEAR)
 check("Clear works when nothing was ever saved", d.shown[-1], "History cleared.")
+
+print("==> ClipStack (all in one)")
+MENU = {item: [i] for i, item in enumerate(gen.MENU)}   # a pick of one menu row
+d = Device(clipboard="copied")
+d.run(ALL, "shared")
+check("shared to it: saves that straight away, no menu", clips(d), ["shared"])
+check("…and leaves the clipboard unread", d.clipboard, "copied")
+d.picks = [MENU["Save Clipboard"]]
+d.run(ALL)
+check("Save Clipboard saves what's on the clipboard", clips(d), ["copied", "shared"])
+check("…and says so", d.shown[-1], "Saved: copied")
+d.picks = [MENU["Paste Multiple"], [0, 1]]
+d.run(ALL)
+check("Paste Multiple merges the ticked clips", d.clipboard, "copied\nshared")
+d.picks = [MENU["Queue Multiple"], [0, 1]]
+d.run(ALL)
+check("Queue Multiple puts the first on the clipboard", (d.clipboard, d.files[Q]), ("copied", "shared"))
+d.picks = [MENU["Paste Next"]]
+d.run(ALL)
+check("Paste Next loads the next one", (d.clipboard, d.files[Q]), ("shared", ""))
+d.picks = [MENU["Paste Next"]]
+d.run(ALL)
+check("…then says the queue is empty", d.shown[-1], "The queue is empty.")
+d.clipboard = shot
+d.picks = [MENU["Save Clipboard"]]
+d.run(ALL)
+check("Save Clipboard keeps a copied image as an image", clips(d)[0].startswith("🖼 Image"), True)
+d.run(ALL, movie)
+check("…and saves a shared video without asking", clips(d)[0].startswith("🎬 Video"), True)
+d.picks = [MENU["Clear History"]]
+d.run(ALL)
+check("Clear History empties it all", d.files, {H: "", Q: ""})
+d.picks = [MENU["Paste Multiple"]]
+d.run(ALL)
+check("an empty history says how to fill it", d.shown[-1], "ClipStack is empty")
+check("every menu row was answered", d.picks, [])
+check("ClipStack is offered in the share sheet", "ActionExtension" in ALL["WFWorkflowTypes"], True)
+check("…and doesn't read the clipboard unless asked to save", "WFWorkflowNoInputBehavior" in ALL, False)
 
 print("==> Structure")
 for name, wf in WF.items():

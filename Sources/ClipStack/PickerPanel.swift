@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import ImageIO
 import QuickLookThumbnailing
 
@@ -298,7 +299,7 @@ final class PickerTable: NSTableView {
 /// One row: tick marker, thumbnail or icon, the clip, and where it came from.
 final class ClipRow: NSTableCellView {
     static let id = NSUserInterfaceItemIdentifier("ClipRow")
-    private let marker = NSTextField(labelWithString: "")
+    private let marker = TickMark()
     private let thumb = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
@@ -306,11 +307,6 @@ final class ClipRow: NSTableCellView {
     init() {
         super.init(frame: .zero)
         identifier = ClipRow.id
-        marker.alignment = .center
-        marker.font = .monospacedDigitSystemFont(ofSize: 11, weight: .bold)
-        marker.wantsLayer = true
-        marker.layer?.cornerRadius = 10
-        marker.layer?.borderWidth = 1.2
         thumb.imageScaling = .scaleProportionallyUpOrDown
         thumb.wantsLayer = true
         thumb.layer?.cornerRadius = 5
@@ -352,16 +348,7 @@ final class ClipRow: NSTableCellView {
         if clip.pinned { bits.insert("📌 pinned", at: 0) }
         detail.stringValue = bits.joined(separator: " · ")
         thumb.image = image
-        if let order {
-            marker.stringValue = "\(order)"
-            marker.textColor = .white
-            marker.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-            marker.layer?.borderColor = NSColor.controlAccentColor.cgColor
-        } else {
-            marker.stringValue = ""
-            marker.layer?.backgroundColor = NSColor.clear.cgColor
-            marker.layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
-        }
+        marker.order = order
     }
 
     static func age(_ date: Date) -> String {
@@ -370,6 +357,57 @@ final class ClipRow: NSTableCellView {
         if s < 3600 { return "\(Int(s / 60))m ago" }
         if s < 86400 { return "\(Int(s / 3600))h ago" }
         return "\(Int(s / 86400))d ago"
+    }
+}
+
+/// The round marker on a row: an empty ring, or a filled circle showing the
+/// clip's place in the paste order.
+final class TickMark: NSView {
+    var order: Int? {
+        didSet {
+            needsDisplay = true
+            setAccessibilityLabel(order.map { "Ticked, \($0)" } ?? "Not ticked")
+        }
+    }
+    private let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)
+
+    init() {
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("Not ticked")
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let side = min(bounds.width, bounds.height)
+        let circle = NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
+        guard let order else {
+            let ring = NSBezierPath(ovalIn: circle.insetBy(dx: 0.6, dy: 0.6))
+            ring.lineWidth = 1.2
+            NSColor.tertiaryLabelColor.setStroke()
+            ring.stroke()
+            return
+        }
+        NSColor.controlAccentColor.setFill()
+        NSBezierPath(ovalIn: circle).fill()
+
+        // Centre the digits' ink rather than their line of text, which has room
+        // for ascenders and descenders and so leaves a number sitting high.
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let fromContext = NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String)
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: "\(order)", attributes: [.font: font, fromContext: true]))
+        let textMatrix = context.textMatrix     // not part of the graphics state
+        context.textMatrix = .identity           // so the ink is measured from (0, 0)
+        let ink = CTLineGetImageBounds(line, context)
+        context.textPosition = CGPoint(x: circle.midX - ink.midX, y: circle.midY - ink.midY)
+        context.saveGState()
+        context.setFillColor(NSColor.white.cgColor)
+        CTLineDraw(line, context)
+        context.restoreGState()
+        context.textMatrix = textMatrix
     }
 }
 
