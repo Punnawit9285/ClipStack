@@ -892,10 +892,12 @@ public class MessageWindow : Form {
 }
 
 public class TrayApp : ApplicationContext {
-    // Set by ClipStack.exe before Program.Run: its own icon, and extra menu
-    // items (start with Windows, uninstall). The PowerShell version leaves them be.
+    // Set by ClipStack.exe before Program.Run: its own icon, extra menu items
+    // (start with Windows, uninstall), and what to say once it is installed.
+    // The PowerShell version leaves them be.
     public static Icon TrayIcon = null;
     public static Action<ContextMenuStrip> ExtendMenu = null;
+    public static string Welcome = null;
 
     static NotifyIcon icon;
     MessageWindow win;
@@ -930,11 +932,16 @@ public class TrayApp : ApplicationContext {
         menu.Items.Add("Exit", null, delegate { Shutdown(); });
         icon.ContextMenuStrip = menu;
 
-        if (!win.HotkeysOk)
-            Notify("Hotkey unavailable",
-                   "Ctrl+Shift+V or Ctrl+Shift+N is taken by another app. Use the tray icon instead.");
-        else
-            Notify("ClipStack running", "Ctrl+Shift+V opens your clipboard history.");
+        string taken = win.HotkeysOk ? null
+            : "Ctrl+Shift+V or Ctrl+Shift+N is taken by another app. Use the tray icon instead.";
+        if (Welcome != null) {
+            string text = Welcome + (taken != null ? "\n\n" + taken : "");
+            // Once the tray is up; recording carries on while the box is open.
+            win.BeginInvoke((MethodInvoker)delegate {
+                MessageBox.Show(text, "ClipStack", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            });
+        } else if (taken != null) Notify("Hotkey unavailable", taken);
+        else Notify("ClipStack running", "Ctrl+Shift+V opens your clipboard history.");
     }
 
     void AddSep(ToolStripMenuItem parent, string label, string value) {
@@ -971,7 +978,9 @@ public static class Program {
         bool first;
         using (Mutex single = new Mutex(true, "Local\\ClipStack.SingleInstance", out first)) {
             if (!first) {
-                MessageBox.Show("ClipStack is already running. Look for its icon in the notification area.",
+                MessageBox.Show("ClipStack is already running.\n\nPress Ctrl+Shift+V to open your clipboard " +
+                                "history, or use its icon in the notification area (click ^ next to the " +
+                                "clock if you don't see it).",
                                 "ClipStack", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }

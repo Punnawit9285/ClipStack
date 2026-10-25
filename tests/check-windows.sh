@@ -1,30 +1,33 @@
 #!/bin/bash
 # Static checks for the Windows version that run on any OS:
-#   - windows/ClipStack.ps1 parses (needs pwsh)
-#   - it is pure ASCII, since Windows PowerShell 5.1 reads BOM-less scripts as ANSI
+#   - windows/ClipStack.ps1 and windows/install.ps1 parse (needs pwsh)
+#   - they are pure ASCII, since Windows PowerShell 5.1 reads BOM-less scripts as ANSI
 #   - its C# compiles as C# 5 against .NET Framework 4.8, its history logic passes
 #     unit tests, and ClipStack.exe builds (all need the dotnet SDK)
 # Set PWSH / DOTNET to point at binaries that aren't on PATH.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PS1="$ROOT/windows/ClipStack.ps1"
+INSTALL="$ROOT/windows/install.ps1"
 PWSH="${PWSH:-$(command -v pwsh || true)}"
 DOTNET="${DOTNET:-$(command -v dotnet || true)}"
 FAIL=0
 
-if perl -ne 'print "  $.: $_" if /[^\x00-\x7F]/' "$PS1" | grep .; then
-    echo "  FAIL  ClipStack.ps1 has non-ASCII characters (above)"; FAIL=1
-else echo "  ok    ClipStack.ps1 is pure ASCII"; fi
+for f in "$PS1" "$INSTALL"; do
+    if perl -ne 'print "  $.: $_" if /[^\x00-\x7F]/' "$f" | grep .; then
+        echo "  FAIL  $(basename "$f") has non-ASCII characters (above)"; FAIL=1
+    else echo "  ok    $(basename "$f") is pure ASCII"; fi
+done
 
 if [ -n "$PWSH" ]; then
-    for f in "$PS1"; do
+    for f in "$PS1" "$INSTALL"; do
         errs="$("$PWSH" -NoProfile -Command "\$e=\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$f',[ref]\$null,[ref]\$e); \$e | % { \$_.ToString() }")"
         if [ -z "$errs" ]; then echo "  ok    $(basename "$f") parses"; else echo "  FAIL  $(basename "$f"): $errs"; FAIL=1; fi
     done
 else echo "  skip  PowerShell parse (no pwsh)"; fi
 
 if [ -n "$DOTNET" ]; then
-    WORK="$(mktemp -d -t clipstack-wincheck)"
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/clipstack-wincheck.XXXXXX")"
     trap 'rm -rf "$WORK"' EXIT
     cp "$ROOT/tests/windows/ClipStackCheck.csproj" "$WORK/"
     awk "/^\\\$source = @'/{f=1;next} /^'@/{f=0} f" "$PS1" > "$WORK/ClipStack.cs"

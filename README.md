@@ -17,12 +17,21 @@ paste or queue them to paste one after another.
 | | Download | Then |
 |---|---|---|
 | **Mac** (macOS 13+) | [**ClipStack-macOS.dmg**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack-macOS.dmg) | Open it and double-click ClipStack. It moves itself to Applications, starts at login and lives in the menu bar. Press **⌘⇧V**. |
-| **Windows** 10 and 11 | [**ClipStack.exe**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.exe) | Double-click it. It installs itself (no admin rights needed), starts with Windows and sits in the notification area. Press **Ctrl+Shift+V**. |
-| **iPhone / iPad** | [**ClipStack-iOS-Shortcuts.zip**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack-iOS-Shortcuts.zip) | Open it in Files, then tap each shortcut and **Add Shortcut**. See [iPhone & iPad](#iphone--ipad). |
+| **Windows** 10 and 11 | [**ClipStack.exe**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.exe) | Double-click it. It installs itself (no admin rights needed), starts with Windows and tells you when it's ready. Press **Ctrl+Shift+V**. |
+| **iPhone / iPad** | [**ClipStack.shortcut**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.shortcut) | Tap it on the iPhone or iPad, open the download and tap **Add Shortcut**. That's the whole install. See [iPhone & iPad](#iphone--ipad). |
 
 The first time, macOS and Windows each ask once whether to open an app from the
 internet, because these downloads aren't signed with a paid developer
 certificate. [Here's what to click.](#opening-it-the-first-time)
+
+**Windows, with nothing to click through:** press `Win`+`R`, paste this line and
+press Enter. It downloads the same ClipStack.exe and installs it, and because
+PowerShell fetches it rather than your browser, neither the browser nor
+SmartScreen has anything to ask.
+
+```
+powershell -c "irm https://raw.githubusercontent.com/Punnawit9285/ClipStack/main/windows/install.ps1 | iex"
+```
 
 <p align="center">
   <img src="demo/demo.svg" alt="Terminal demo: copies are recorded, three are merged into one paste, then queued and pasted one by one; a screenshot and a video file are recorded and the image is pasted back as an image" width="668">
@@ -217,45 +226,54 @@ and the `.dmg`).
 
 ## iPhone & iPad
 
-Five shortcuts, nothing else to install. iOS lets nothing watch the clipboard in
-the background, so **saving a clip is one tap** here instead of automatic.
+One shortcut, nothing else to install. iOS lets nothing watch the clipboard in
+the background, so here **you save a clip with a tap** instead of automatically.
 Picking, merging and queueing work as they do on the Mac, for text, images and
 videos alike.
 
 ### Install
 
-Open each file in `ios/` on the iPhone or iPad and tap **Add Shortcut**. On
-GitHub, tap the file, then **Download**. If your Shortcuts sync through iCloud,
-you can instead double-click them on a Mac and they will appear on your other
-devices.
+On the iPhone or iPad, tap [**ClipStack.shortcut**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.shortcut),
+open the download and tap **Add Shortcut**. If your Shortcuts sync through
+iCloud, it then appears on your other devices too.
 
-| Shortcut | Does |
+Run **ClipStack** and choose what to do:
+
+| Choose | Does |
 |---|---|
-| `ClipStack iOS - Save` | Adds what's on the clipboard to history (text, an image or a video), or whatever you share to it from the share sheet |
-| `ClipStack iOS - Paste Multiple` | Tick several clips; text is merged onto the clipboard, one per line. With images or videos among them, each goes on as its own item |
-| `ClipStack iOS - Queue Multiple` | Tick several; the first goes on the clipboard, the rest wait |
-| `ClipStack iOS - Paste Next` | Loads the next queued clip |
-| `ClipStack iOS - Clear` | Empties history and the queue and deletes saved images and videos (asks first) |
+| Save Clipboard | Adds what's on the clipboard to history: text, an image or a video |
+| Paste Multiple | Tick several clips; text is merged onto the clipboard, one per line. With images or videos among them, each goes on as its own item |
+| Queue Multiple | Tick several; the first goes on the clipboard, the rest wait |
+| Paste Next | Loads the next queued clip |
+| Clear History | Empties history and the queue and deletes saved images and videos (asks first) |
 
-Picked clips are pasted top to bottom, in the order the list shows them (newest
-first).
+Share something to ClipStack from the share sheet and it is saved straight
+away, with no menu. Picked clips are pasted top to bottom, in the order the list
+shows them (newest first).
 
-### Make saving one tap
+### Make saving quick
 
-- **Back Tap** (iPhone): Settings › Accessibility › Touch › Back Tap › Double
-  Tap › `ClipStack iOS - Save`. Copy something, tap the back of the phone twice.
-- **Action Button** (iPhone 15 Pro and later): Settings › Action Button › Shortcut.
 - **Share sheet**: select text, or a photo or video in Photos, tap Share ›
-  `ClipStack iOS - Save`.
-- **Control Center** or a **Home Screen widget**: add Save, Paste Multiple and
-  Paste Next for quick access, which is handy on iPad.
+  `ClipStack`. It's saved at once.
+- **Back Tap** (iPhone): Settings › Accessibility › Touch › Back Tap › Double
+  Tap › `ClipStack`. Copy something, tap the back of the phone twice and
+  choose Save Clipboard.
+- **Action Button** (iPhone 15 Pro and later): Settings › Action Button › Shortcut.
+- **Control Center** or a **Home Screen widget**: add `ClipStack` for quick
+  access, which is handy on iPad.
+
+For a Back Tap or widget that skips the menu, add the single-purpose shortcuts
+from [ClipStack-iOS-Shortcuts.zip](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack-iOS-Shortcuts.zip):
+`ClipStack iOS - Save` (which also takes the share sheet), `- Paste Multiple`,
+`- Queue Multiple`, `- Paste Next` and `- Clear`. They share ClipStack's history.
 
 ### The first run
 
-Each shortcut asks once before it reads the clipboard, saves a file or shows a
+ClipStack asks once before it reads the clipboard, saves a file or shows a
 notification. Choose **Always Allow** so it stops asking. If iOS keeps asking
 before *pasting*, set Settings › Apps › Shortcuts › Paste from Other Apps to
-**Allow**. Clear also asks you to confirm deleting the `media` folder each time.
+**Allow**. Clear History also asks you to confirm deleting the `media` folder
+each time.
 
 ### Where it keeps things
 
@@ -267,25 +285,28 @@ Drive file.
 Images and videos are saved as they are, once each, in `ClipStack/media`, named
 by a hash of their content. History lists them as, for example,
 `🖼 Image 1.2 MB — 3f9a1c2b0d4e.png`, and pasting gives back the picture or the
-video itself. They stay until you run Clear. Save records a video the size it
-is, so saving long videos fills space quickly.
+video itself. They stay until you clear history. Saving records a video the size
+it is, so saving long videos fills space quickly.
 
 Password managers' "don't record this" markers aren't visible to Shortcuts, so
-just don't run Save on a password.
+just don't save a password.
 
-To rebuild the shortcuts after changing `ios/make-shortcuts.py`, run it on a Mac;
-`shortcuts sign` needs macOS.
+To rebuild the shortcuts after changing `ios/make-shortcuts.py`, run it on a Mac
+signed in to iCloud; `shortcuts sign` needs both.
 
 ---
 
 ## Windows
 
-Download [**ClipStack.exe**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.exe) and double-click it. It copies
-itself to `%LOCALAPPDATA%\Programs\ClipStack`, starts with Windows, and shows
-its icon in the notification area. Downloading a newer version and running it
+Download [**ClipStack.exe**](https://github.com/Punnawit9285/ClipStack/releases/latest/download/ClipStack.exe) and double-click it (or use
+the [one-line install](#download)). It copies itself to
+`%LOCALAPPDATA%\Programs\ClipStack`, starts with Windows, adds itself to the
+Start menu and shows its icon in the notification area; Windows 11 may tuck that
+icon under the ^ next to the clock. Downloading a newer version and running it
 upgrades in place.
 
-The tray icon's menu has **Start with Windows** and **Uninstall ClipStack…**.
+The tray icon's menu has **Start with Windows** and **Uninstall ClipStack…**, and
+ClipStack is in Settings › Apps, where you can uninstall it like any other app.
 
 **Prefer a script?** The same app is in `windows\ClipStack.ps1`, a single
 PowerShell file whose C# is compiled at launch by the compiler that ships with
@@ -351,7 +372,7 @@ ignore copies made while a known password manager is frontmost. It is still a
 plain-text file of things you copied — treat it accordingly.
 
 To wipe everything: `clipstack clear` on macOS, the tray menu on Windows, or
-`ClipStack iOS - Clear` on iPhone and iPad.
+ClipStack › Clear History on iPhone and iPad.
 
 ---
 
@@ -369,6 +390,9 @@ python3 tests/test-ios.py    # the generated iOS shortcuts, in a small interpret
 ClipStack is recording. `check-windows.sh` needs `pwsh` and the .NET SDK and
 skips whichever is missing; the C# compile works on macOS and Linux too.
 
+To make a release, run `./release.sh` on a Mac. It builds every download into
+`dist/` and prints the `gh release create` command that publishes them.
+
 ---
 
 ## Troubleshooting
@@ -384,8 +408,11 @@ Security**, scroll down, click **Open Anyway** next to ClipStack, and confirm.
 (On macOS 13 and 14 you can instead right-click ClipStack › **Open** › **Open**.)
 After that it opens normally, including at login.
 
-**Windows.** SmartScreen shows *"Windows protected your PC"*. Click **More info**,
-then **Run anyway**.
+**Windows.** Your browser may first say ClipStack.exe *isn't commonly
+downloaded*: in Edge, click **…** › **Keep**, then **Show more** › **Keep
+anyway**; in Chrome, click **Keep**. Then SmartScreen shows *"Windows protected
+your PC"*: click **More info**, then **Run anyway**. The
+[one-line install](#download) avoids both.
 
 ### Other problems
 
@@ -408,10 +435,10 @@ ClipStack shows a balloon saying so at startup. Use the tray icon, or change the
 
 **macOS: the Shortcuts from `macos/` appear on my iPhone and fail there.** They
 sync through iCloud, but they run a Mac program. On iPhone and iPad, use the
-`ClipStack iOS - …` shortcuts instead.
+`ClipStack` shortcut from [iPhone & iPad](#iphone--ipad) instead.
 
-**iPhone/iPad: "ClipStack is empty".** Nothing has been saved yet. Copy something
-and run `ClipStack iOS - Save`.
+**iPhone/iPad: "ClipStack is empty".** Nothing has been saved yet. Copy something,
+then run ClipStack and choose Save Clipboard.
 
 **Windows: it pastes the wrong thing after the picker closes.** ClipStack
 synthesises `Ctrl+V` and briefly releases your modifier keys first. If your
